@@ -142,7 +142,7 @@ describe("desirium-contract", () => {
           platformTokenAccount: platformTokenAccount,
           platform: platform.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: anchor.web3.AssociatedTokenProgram.programId,
+          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
           systemProgram: SystemProgram.programId,
         })
         .signers([donor])
@@ -150,7 +150,7 @@ describe("desirium-contract", () => {
       
       assert.fail("Expected transaction to fail");
     } catch (error) {
-      assert.include(error.message, "Insufficient balance");
+      assert.include(error.message, "insufficient funds");
     }
   });
 });
