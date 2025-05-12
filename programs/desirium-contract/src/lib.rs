@@ -10,13 +10,11 @@ pub mod desirium_contract {
 
     pub fn create_wishlist(
         ctx: Context<CreateWishlist>,
-        title: String,
-        description: String,
+        ipfs_url: String,
     ) -> Result<()> {
         let wishlist = &mut ctx.accounts.wishlist;
         wishlist.authority = ctx.accounts.authority.key();
-        wishlist.title = title;
-        wishlist.description = description;
+        wishlist.ipfs_url = ipfs_url;
         wishlist.created_at = Clock::get()?.unix_timestamp;
         wishlist.total_donations = 0;
         
@@ -33,14 +31,11 @@ pub mod desirium_contract {
             ctx.accounts.token_program.to_account_info(),
             Transfer {
                 from: ctx.accounts.donor_token_account.to_account_info(),
-                to: ctx.accounts.platform_token_account.to_account_info(),
+                to: ctx.accounts.platform_token_account.to_account_info(), // TODO: Check
                 authority: ctx.accounts.donor.to_account_info(),
             },
         );
         token::transfer(transfer_ctx, amount)?;
-
-        // TODO: Implement swap through Pump.fun
-        // This will be implemented in the next step
 
         // Update wishlist total donations
         let wishlist = &mut ctx.accounts.wishlist;
@@ -55,8 +50,7 @@ pub mod desirium_contract {
 #[account]
 pub struct Wishlist {
     pub authority: Pubkey,      // Creator of the wishlist
-    pub title: String,          // Title of the wishlist
-    pub description: String,    // Description of the wishlist
+    pub ipfs_url: String,       // IPFS URL for wishlist metadata
     pub created_at: i64,        // Timestamp of creation
     pub total_donations: u64,   // Total donations received in USDC
 }
@@ -68,8 +62,7 @@ pub struct CreateWishlist<'info> {
         payer = authority,
         space = 8 + // discriminator
             32 +    // authority
-            100 +   // title (max length)
-            500 +   // description (max length)
+            60 +    // ipfs_url (max length)
             8 +     // created_at
             8       // total_donations
     )]

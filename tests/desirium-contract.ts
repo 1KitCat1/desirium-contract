@@ -18,8 +18,7 @@ describe("desirium-contract", () => {
   const platform = Keypair.generate();
   
   // Test data
-  const title = "Test Wishlist";
-  const description = "This is a test wishlist";
+  const ipfsUrl = "ipfs://QmTestHash";
   const donationAmount = new anchor.BN(1000000); // 1 token with 6 decimals
   
   // Token accounts
@@ -32,9 +31,10 @@ describe("desirium-contract", () => {
   before(async () => {
     // Airdrop SOL to test accounts
     const airdropAmount = LAMPORTS_PER_SOL;
-    await provider.connection.requestAirdrop(authority.publicKey, airdropAmount);
-    await provider.connection.requestAirdrop(donor.publicKey, airdropAmount);
-    await provider.connection.requestAirdrop(platform.publicKey, airdropAmount);
+    for (const kp of [authority, donor, platform]) {
+      const sig = await provider.connection.requestAirdrop(kp.publicKey, airdropAmount);
+      await provider.connection.confirmTransaction(sig, "confirmed");
+    }
     
     // Create test token mint
     mint = await createMint(
@@ -79,7 +79,7 @@ describe("desirium-contract", () => {
 
   it("Creates a wishlist", async () => {
     const tx = await program.methods
-      .createWishlist(title, description)
+      .createWishlist(ipfsUrl)
       .accounts({
         wishlist: wishlistPda,
         authority: authority.publicKey,
@@ -95,8 +95,7 @@ describe("desirium-contract", () => {
     
     // Verify wishlist data
     assert.equal(wishlist.authority.toString(), authority.publicKey.toString());
-    assert.equal(wishlist.title, title);
-    assert.equal(wishlist.description, description);
+    assert.equal(wishlist.ipfsUrl, ipfsUrl);
     assert.equal(wishlist.totalDonations.toNumber(), 0);
   });
 
