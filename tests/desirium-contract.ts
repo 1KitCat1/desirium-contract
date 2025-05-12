@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { DesiriumContract } from "../target/types/desirium_contract";
 import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, createMint, createAccount, mintTo } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createMint, createAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("desirium-contract", () => {
@@ -109,7 +109,7 @@ describe("desirium-contract", () => {
         platformTokenAccount: platformTokenAccount,
         platform: platform.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: anchor.web3.AssociatedTokenProgram.programId,
+        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
         systemProgram: SystemProgram.programId,
       })
       .signers([donor])
