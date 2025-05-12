@@ -59,6 +59,8 @@ pub struct Wishlist {
 pub struct CreateWishlist<'info> {
     #[account(
         init,
+        seeds = [b"wishlist", authority.key().as_ref()],
+        bump,
         payer = authority,
         space = 8 + // discriminator
             32 +    // authority
