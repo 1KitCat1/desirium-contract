@@ -5,10 +5,11 @@ use anchor_spl::{associated_token::get_associated_token_address, token::{Mint, T
 
 declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
 
+// IMPORTANT: change to the actual protocol owner before deploying
 pub const PROTOCOL_OWNER: &str = "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU";
 pub const COMMISSION_BPS_ABOVE_TARGET: u64 = 100; // 1% (100 basis points)
-pub const COMMISSION_BPS_BELOW_TARGET: u64 = 500; // 5%
-pub const BPS_DENOMINATOR: u64 = 10_000;
+pub const COMMISSION_BPS_BELOW_TARGET: u64 = 500; // 5% (500 basis points)
+pub const BPS_DENOMINATOR: u64 = 10_000; // BPS - basis points
 
 
 #[program]
