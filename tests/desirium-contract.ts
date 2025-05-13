@@ -13,6 +13,10 @@ import {
 } from "@solana/spl-token";
 import { assert } from "chai";
 
+const PROTOCOL_OWNER = new PublicKey(
+  "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU"
+);
+
 describe("token_vault", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
@@ -29,6 +33,7 @@ describe("token_vault", () => {
   let user2: Keypair;
   let user1TokenAccount: PublicKey;
   let user2TokenAccount: PublicKey;
+  let protocolTokenAccount: PublicKey;
 
   before(async () => {
     // Create mint
@@ -68,12 +73,29 @@ describe("token_vault", () => {
     // Mint tokens to users
     await mintTo(mint, user1TokenAccount, 100 * 10 ** decimals, provider);
     await mintTo(mint, user2TokenAccount, 100 * 10 ** decimals, provider);
+
+    // Create protocol token account using the same mint
+    protocolTokenAccount = getAssociatedTokenAddressSync(
+      mint, // Use the same mint as the vault
+      PROTOCOL_OWNER
+    );
+    if (!(await provider.connection.getAccountInfo(protocolTokenAccount))) {
+      const tx = new anchor.web3.Transaction().add(
+        createAssociatedTokenAccountInstruction(
+          provider.wallet.publicKey,
+          protocolTokenAccount,
+          PROTOCOL_OWNER,
+          mint
+        )
+      );
+      await provider.sendAndConfirm(tx);
+    }
   });
 
   it("Initialize vault with target amount", async () => {
     // Use BigNumber for the initialize call with the target amount
     const targetAmountBN = new anchor.BN(targetAmount.toString());
-    
+
     const tx = await program.methods
       .initialize(targetAmountBN)
       .accounts({
@@ -96,7 +118,7 @@ describe("token_vault", () => {
     // Verify the target amount was set correctly
     const vaultConfig = await program.account.vaultConfig.fetch(vaultConfigPda);
     assert.equal(
-      vaultConfig.targetAmount.toString(), 
+      vaultConfig.targetAmount.toString(),
       targetAmount.toString(),
       "Target amount should be set correctly"
     );
@@ -105,13 +127,14 @@ describe("token_vault", () => {
   it("User1 transfers tokens into vault", async () => {
     // Convert amount to Anchor's BN type
     const amount = new anchor.BN((1 * 10 ** decimals).toString());
-    
+
     await program.methods
-      .transferIn(amount)
+      .transferIn(new anchor.BN(1 * 10 ** decimals))
       .accounts({
         vaultConfig: vaultConfigPda,
         vaultTokenAccount: tokenVault,
         senderTokenAccount: user1TokenAccount,
+        protocolTokenAccount: protocolTokenAccount, // Added
         signer: user1.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
@@ -128,13 +151,14 @@ describe("token_vault", () => {
   it("User2 transfers tokens into vault", async () => {
     // Convert amount to Anchor's BN type
     const amount = new anchor.BN((1 * 10 ** decimals).toString());
-    
+
     await program.methods
       .transferIn(amount)
       .accounts({
         vaultConfig: vaultConfigPda,
         vaultTokenAccount: tokenVault,
         senderTokenAccount: user2TokenAccount,
+        protocolTokenAccount: protocolTokenAccount, // Added
         signer: user2.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
@@ -151,16 +175,19 @@ describe("token_vault", () => {
   it("Checks funding progress against target", async () => {
     const vaultBalance = await getAccountBalance(tokenVault);
     const vaultConfig = await program.account.vaultConfig.fetch(vaultConfigPda);
-    
-    const targetAmountTokens = BigInt(vaultConfig.targetAmount.toString()) / mintDecimals;
+
+    const targetAmountTokens =
+      BigInt(vaultConfig.targetAmount.toString()) / mintDecimals;
     const progress = (vaultBalance * BigInt(100)) / targetAmountTokens;
-    
-    console.log(`Funding progress: ${progress}% (${vaultBalance} of ${targetAmountTokens} tokens)`);
-    
+
+    console.log(
+      `Funding progress: ${progress}% (${vaultBalance} of ${targetAmountTokens} tokens)`
+    );
+
     // Verify we're not yet at target
     assert.isBelow(
-      Number(progress), 
-      100, 
+      Number(progress),
+      100,
       "Vault should not yet be fully funded"
     );
   });
@@ -168,51 +195,60 @@ describe("token_vault", () => {
   it("Fails when user tries to fund vault with incorrect token mint", async () => {
     // Create a second mint (wrong mint)
     const wrongMint = await createMint(decimals, provider);
-  
+
     // Create token account for user1 with wrong mint
-    const wrongTokenAccount = await createTokenAccountIfNeeded(wrongMint, user1.publicKey, provider);
-  
+    const wrongTokenAccount = await createTokenAccountIfNeeded(
+      wrongMint,
+      user1.publicKey,
+      provider
+    );
+
     // Mint tokens to wrong token account
     await mintTo(wrongMint, wrongTokenAccount, 100 * 10 ** decimals, provider);
-  
+
     // Attempt transferIn with wrong token account - should fail constraint check
     try {
       // Convert amount to Anchor's BN type
       const amount = new anchor.BN((1 * 10 ** decimals).toString());
-      
+
       await program.methods
         .transferIn(amount)
         .accounts({
           vaultConfig: vaultConfigPda,
           vaultTokenAccount: tokenVault,
           senderTokenAccount: wrongTokenAccount,
+          protocolTokenAccount: protocolTokenAccount, // Added
           signer: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
         .signers([user1])
         .rpc();
-  
-      assert.fail("transferIn should have failed due to mint mismatch constraint");
+
+      assert.fail(
+        "transferIn should have failed due to mint mismatch constraint"
+      );
     } catch (error: any) {
       const errMsg = error.error?.msg ?? error.toString();
       // Anchor constraint raw error code is 2003
       assert.ok(
-        errMsg.includes("A raw constraint was violated") || errMsg.includes("ConstraintRaw"),
+        errMsg.includes("A raw constraint was violated") ||
+          errMsg.includes("ConstraintRaw"),
         `Expected raw constraint error, got: ${errMsg}`
       );
     }
   });
-  
+
   it("Transfer out tokens", async () => {
     // Convert amount to Anchor's BN type
     const amount = new anchor.BN((1 * 10 ** decimals).toString());
-    
+
     await program.methods
       .transferOut(amount)
       .accounts({
         vaultConfig: vaultConfigPda,
         vaultTokenAccount: tokenVault,
         senderTokenAccount: user1TokenAccount,
+        protocolTokenAccount: protocolTokenAccount, // Added
         signer: provider.wallet.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
@@ -221,7 +257,7 @@ describe("token_vault", () => {
     const userBalance = await getAccountBalance(user1TokenAccount);
     const vaultBalance = await getAccountBalance(tokenVault);
 
-    assert.equal(userBalance, BigInt(100), "User should have 100 tokens");
+    assert.equal(userBalance, BigInt(99), "User should have 99 tokens");
     assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token left");
   });
 

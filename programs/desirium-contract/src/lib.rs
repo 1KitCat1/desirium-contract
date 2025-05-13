@@ -1,7 +1,14 @@
+use std::str::FromStr;
+
 use anchor_lang::prelude::*;
-use anchor_spl::token::{Mint, Token, TokenAccount, Transfer};
+use anchor_spl::{associated_token::get_associated_token_address, token::{Mint, Token, TokenAccount, Transfer}};
 
 declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
+
+pub const PROTOCOL_OWNER: &str = "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU";
+pub const COMMISSION_BPS: u64 = 100; // 1% (100 basis points)
+pub const BPS_DENOMINATOR: u64 = 10_000;
+
 
 #[program]
 pub mod token_vault {
@@ -40,25 +47,51 @@ pub mod token_vault {
             ctx.accounts.vault_config.token_mint,
             VaultError::InvalidMint
         );
-
+    
+        // Calculate commission (1%)
+        let commission = amount
+            .checked_mul(COMMISSION_BPS)
+            .unwrap()
+            .checked_div(BPS_DENOMINATOR)
+            .unwrap();
+        let user_amount = amount.checked_sub(commission).unwrap();
+    
         let bump = ctx.accounts.vault_config.bump;
         let seeds = &[b"vault_config".as_ref(), &[bump]];
         let signer = &[&seeds[..]];
-
-        let cpi_accounts = Transfer {
+    
+        // Transfer commission to protocol
+        let protocol_token_account = ctx.accounts.protocol_token_account.to_account_info();
+        let cpi_accounts_commission = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: protocol_token_account,
+            authority: ctx.accounts.vault_config.to_account_info(),
+        };
+        anchor_spl::token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                cpi_accounts_commission,
+                signer,
+            ),
+            commission,
+        )?;
+    
+        // Transfer the rest to the user
+        let cpi_accounts_user = Transfer {
             from: ctx.accounts.vault_token_account.to_account_info(),
             to: ctx.accounts.sender_token_account.to_account_info(),
             authority: ctx.accounts.vault_config.to_account_info(),
         };
-
         anchor_spl::token::transfer(
             CpiContext::new_with_signer(
                 ctx.accounts.token_program.to_account_info(),
-                cpi_accounts,
+                cpi_accounts_user,
                 signer,
             ),
-            amount,
-        )
+            user_amount,
+        )?;
+    
+        Ok(())
     }
 }
 
@@ -123,11 +156,22 @@ pub struct TransferAccounts<'info> {
     )]
     pub sender_token_account: Account<'info, TokenAccount>,
 
+    /// CHECK: This is a constant protocol-owned token account
+    #[account(
+        mut,
+        address = get_associated_token_address(
+            &Pubkey::from_str(PROTOCOL_OWNER).unwrap(),
+            &vault_config.token_mint
+        )
+    )]
+    pub protocol_token_account: AccountInfo<'info>,
+
     #[account(mut)]
     pub signer: Signer<'info>,
 
     pub token_program: Program<'info, Token>,
 }
+
 
 #[error_code]
 pub enum VaultError {
