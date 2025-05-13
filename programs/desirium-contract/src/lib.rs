@@ -1,136 +1,206 @@
+use std::str::FromStr;
+
 use anchor_lang::prelude::*;
-use anchor_spl::associated_token::AssociatedToken;
-use anchor_spl::token::{self, Token, TokenAccount, Transfer};
+use anchor_spl::{associated_token::get_associated_token_address, token::{Mint, Token, TokenAccount, Transfer}};
 
 declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
 
-// USDC token mint address
-// pub const USDC_MINT: &str = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v";
+// IMPORTANT: change to the actual protocol owner before deploying
+pub const PROTOCOL_OWNER: &str = "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU";
+pub const COMMISSION_BPS_ABOVE_TARGET: u64 = 100; // 1% (100 basis points)
+pub const COMMISSION_BPS_BELOW_TARGET: u64 = 500; // 5% (500 basis points)
+pub const BPS_DENOMINATOR: u64 = 10_000; // BPS - basis points
 
 
 #[program]
-pub mod desirium_contract {
+pub mod token_vault {
     use super::*;
 
-    pub fn create_wishlist(ctx: Context<CreateWishlist>, ipfs_url: String, token_mint: Pubkey) -> Result<()> {
-        let wishlist = &mut ctx.accounts.wishlist;
-        wishlist.authority = ctx.accounts.authority.key();
-        wishlist.ipfs_url = ipfs_url;
-        wishlist.created_at = Clock::get()?.unix_timestamp;
-        wishlist.total_donations = 0;
-        wishlist.token_mint = token_mint;
-
-        msg!("Created wishlist: {}", wishlist.key());
+    pub fn initialize(ctx: Context<Initialize>, target_amount: u64, ipfs_link: String) -> Result<()> {
+        let config = &mut ctx.accounts.vault_config;
+        config.token_mint = ctx.accounts.token_mint.key();
+        config.target_amount = target_amount;
+        config.bump = ctx.bumps.vault_config;
+        require!(ipfs_link.len() <= 200, VaultError::IpfsLinkTooLong);
+        config.ipfs_link = ipfs_link;
         Ok(())
     }
 
-    pub fn donate(ctx: Context<Donate>, amount: u64) -> Result<()> {
-        // Verify the token is the one specified in the wishlist
-        require!(
-            ctx.accounts.donor_token_account.mint == ctx.accounts.wishlist.token_mint,
-            DesiriumError::InvalidToken
+    pub fn transfer_in(ctx: Context<TransferAccounts>, amount: u64) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.sender_token_account.mint,
+            ctx.accounts.vault_config.token_mint,
+            VaultError::InvalidMint
         );
 
-        let donor_token_account = &ctx.accounts.donor_token_account;
-        if donor_token_account.amount < amount {
-            return Err(DesiriumError::InsufficientBalance.into());
-        }
-        // Transfer tokens from donor to platform
-        let transfer_ctx = CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            Transfer {
-                from: ctx.accounts.donor_token_account.to_account_info(),
-                to: ctx.accounts.platform_token_account.to_account_info(), // TODO: Check
-                authority: ctx.accounts.donor.to_account_info(),
-            },
+        let cpi_accounts = Transfer {
+            from: ctx.accounts.sender_token_account.to_account_info(),
+            to: ctx.accounts.vault_token_account.to_account_info(),
+            authority: ctx.accounts.signer.to_account_info(),
+        };
+
+        anchor_spl::token::transfer(
+            CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts),
+            amount,
+        )
+    }
+
+    pub fn transfer_out(ctx: Context<TransferAccounts>, amount: u64) -> Result<()> {
+        require_keys_eq!(
+            ctx.accounts.sender_token_account.mint,
+            ctx.accounts.vault_config.token_mint,
+            VaultError::InvalidMint
         );
-        token::transfer(transfer_ctx, amount)?;
-
-        // Update wishlist total donations
-        let wishlist = &mut ctx.accounts.wishlist;
-        wishlist.total_donations = wishlist
-            .total_donations
-            .checked_add(amount)
-            .ok_or(DesiriumError::Overflow)?;
-
-        msg!("Donation received: {} tokens", amount);
+    
+        // Get current vault balance
+        let vault_balance = ctx.accounts.vault_token_account.amount;
+    
+        // Choose commission rate
+        let commission_bps = if vault_balance >= ctx.accounts.vault_config.target_amount {
+            COMMISSION_BPS_ABOVE_TARGET // 1%
+        } else {
+            COMMISSION_BPS_BELOW_TARGET // 5%
+        };
+    
+        // Calculate commission and user amount
+        let commission = amount
+            .checked_mul(commission_bps)
+            .unwrap()
+            .checked_div(BPS_DENOMINATOR)
+            .unwrap();
+        let user_amount = amount.checked_sub(commission).unwrap();
+    
+        let bump = ctx.accounts.vault_config.bump;
+        let seeds = &[b"vault_config".as_ref(), &[bump]];
+        let signer = &[&seeds[..]];
+    
+        // Transfer commission to protocol
+        let protocol_token_account = ctx.accounts.protocol_token_account.to_account_info();
+        let cpi_accounts_commission = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: protocol_token_account,
+            authority: ctx.accounts.vault_config.to_account_info(),
+        };
+        anchor_spl::token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                cpi_accounts_commission,
+                signer,
+            ),
+            commission,
+        )?;
+    
+        // Transfer the rest to the user
+        let cpi_accounts_user = Transfer {
+            from: ctx.accounts.vault_token_account.to_account_info(),
+            to: ctx.accounts.sender_token_account.to_account_info(),
+            authority: ctx.accounts.vault_config.to_account_info(),
+        };
+        anchor_spl::token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                cpi_accounts_user,
+                signer,
+            ),
+            user_amount,
+        )?;
+    
         Ok(())
+    }
+    pub fn get_ipfs_link(ctx: Context<GetIpfsLink>) -> Result<String> {
+        Ok(ctx.accounts.vault_config.ipfs_link.clone())
     }
 }
 
 #[account]
-pub struct Wishlist {
-    pub authority: Pubkey,    // Creator of the wishlist
-    pub ipfs_url: String,     // IPFS URL for wishlist metadata
-    pub created_at: i64,      // Timestamp of creation
-    pub total_donations: u64, // Total donations received in tokens
-    pub token_mint: Pubkey,   // Token mint that this wishlist accepts
+pub struct VaultConfig {
+    pub token_mint: Pubkey,
+    pub target_amount: u64,
+    pub bump: u8,
+    pub ipfs_link: String,
 }
 
 #[derive(Accounts)]
-pub struct CreateWishlist<'info> {
+pub struct Initialize<'info> {
     #[account(
         init,
-        seeds = [b"wishlist", authority.key().as_ref()],
+        payer = signer,
+        seeds = [b"vault_config"],
         bump,
-        payer = authority,
-        space = 8 + // discriminator
-            32 +    // authority
-            60 +    // ipfs_url (max length)
-            8 +     // created_at
-            8 +     // total_donations
-            32      // token_mint
+        space = 8 + 32 + 8 + 1 + 4 + 200 // discriminator + pubkey + u64 + u8 + str
     )]
-    pub wishlist: Account<'info, Wishlist>,
+    pub vault_config: Account<'info, VaultConfig>,
+
+    #[account(
+        init,
+        payer = signer,
+        seeds = [b"token_vault", token_mint.key().as_ref()],
+        bump,
+        token::mint = token_mint,
+        token::authority = vault_config,
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    pub token_mint: Account<'info, Mint>,
 
     #[account(mut)]
-    pub authority: Signer<'info>,
+    pub signer: Signer<'info>,
 
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
-pub struct Donate<'info> {
-    #[account(mut)]
-    pub wishlist: Account<'info, Wishlist>,
-
-    #[account(mut)]
-    pub donor: Signer<'info>,
-
-    #[account(
-        mut,
-        constraint = donor_token_account.owner == donor.key(),
-        constraint = donor_token_account.mint == wishlist.token_mint
-    )]
-    pub donor_token_account: Account<'info, TokenAccount>,
-
-    #[account(
-        mut,
-        constraint = platform_token_account.owner == platform.key(),
-        constraint = platform_token_account.mint == wishlist.token_mint
-    )]
-    pub platform_token_account: Account<'info, TokenAccount>,
-
-    /// CHECK: This is the platform's token account owner. We only use it to verify the platform_token_account ownership.
-    #[account(mut)]
-    pub platform: AccountInfo<'info>,
-
-    pub token_program: Program<'info, Token>,
-    pub associated_token_program: Program<'info, AssociatedToken>,
-    pub system_program: Program<'info, System>,
+pub struct GetIpfsLink<'info> {
+    #[account(seeds = [b"vault_config"], bump = vault_config.bump)]
+    pub vault_config: Account<'info, VaultConfig>,
 }
 
-// Error codes
+#[derive(Accounts)]
+pub struct TransferAccounts<'info> {
+    #[account(
+        seeds = [b"vault_config"],
+        bump = vault_config.bump,
+    )]
+    pub vault_config: Account<'info, VaultConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"token_vault", vault_config.token_mint.as_ref()],
+        bump,
+        token::mint = vault_config.token_mint,
+        token::authority = vault_config,
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = sender_token_account.mint == vault_config.token_mint
+    )]
+    pub sender_token_account: Account<'info, TokenAccount>,
+
+    /// CHECK: This is a constant protocol-owned token account
+    #[account(
+        mut,
+        address = get_associated_token_address(
+            &Pubkey::from_str(PROTOCOL_OWNER).unwrap(),
+            &vault_config.token_mint
+        )
+    )]
+    pub protocol_token_account: AccountInfo<'info>,
+
+    #[account(mut)]
+    pub signer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
+
 #[error_code]
-pub enum DesiriumError {
-    #[msg("Invalid token account")]
-    InvalidTokenAccount,
-    #[msg("Insufficient balance")]
-    InsufficientBalance,
-    #[msg("Invalid swap parameters")]
-    InvalidSwapParameters,
-    #[msg("Arithmetic overflow")]
-    Overflow,
-    #[msg("Token mismatch: This wishlist only accepts a specific token")]
-    InvalidToken,
+pub enum VaultError {
+    #[msg("Token mint mismatch with vault configuration")]
+    InvalidMint,
+    #[msg("IPFS link too long")]
+    IpfsLinkTooLong
 }

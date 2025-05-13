@@ -1,162 +1,166 @@
-# Desirium Smart Contract
+# Desirium Token Vault
 
-A Solana smart contract for creating and managing wishlists that accept token donations from users.
+A Solana program for managing token vaults with funding target tracking and protocol commission functionality.
 
 ## Overview
 
-Desirium is a decentralized protocol that allows users to create wishlists and receive token donations. Each wishlist is associated with an IPFS URL that contains metadata about the wishlist, and accepts donations in a specific token specified during creation.
+Desirium Token Vault is a Solana smart contract built with Anchor that allows users to deposit and withdraw tokens from a secure vault. The contract supports setting funding targets and implements a protocol fee on withdrawals to sustain the ecosystem.
 
-## Smart Contract Logic
+## Features
 
-The Desirium contract has the following key components:
+- **Vault Initialization**: Create a vault with a specified funding target for any SPL token
+- **IPFS Link Management**: Store and retrieve IPFS links for vault configurations, allowing for storage and retrieval of metadata.
+- **Token Deposits**: Deposit tokens into the vault from any compatible token account
+- **Token Withdrawals**: Withdraw tokens with automatic protocol fee handling (1% commission)
+- **Target Amount Tracking**: Monitor progress towards funding goals
 
-1. **Wishlist Account**: Stores information about a wishlist including:
-   - Authority (creator/owner)
-   - IPFS URL for the wishlist metadata
-   - Creation timestamp
-   - Total donations received
-   - Token mint address that the wishlist accepts
+## Technical Requirements
 
-2. **Platform Account**: Acts as an intermediary to collect tokens from donors before they are sent to the wishlist owner.
+- [Solana CLI](https://docs.solanalabs.com/cli/install) (tested with 2.1.21)
+- [Rust](https://www.rust-lang.org/tools/install) (tested with 1.86.0)
+- [Anchor](https://www.anchor-lang.com/docs/installation) (tested with v0.31.1)
+- [Node.js](https://nodejs.org/) (tested with v20.18.3)
+- [Yarn](https://yarnpkg.com/getting-started/install) (tested with v1.22.22)
 
-## Contract Functions
+## Installation
 
-### Create Wishlist
-```rust
-pub fn create_wishlist(ctx: Context<CreateWishlist>, ipfs_url: String, token_mint: Pubkey) -> Result<()>
-```
-Creates a new wishlist with the specified IPFS URL and token mint. The creator becomes the authority/owner of the wishlist.
+1. Clone the repository:
+   ```bash
+   git clone // repository link
+   cd desirium-contract
+   ```
 
-### Donate
-```rust
-pub fn donate(ctx: Context<Donate>, amount: u64) -> Result<()>
-```
-Allows users to donate tokens to a wishlist. The function:
-- Verifies that the token being donated matches the wishlist's accepted token (*token_mint* parameter)
-- Checks that the donor has sufficient balance
-- Transfers tokens from the donor to the platform account
-- Updates the wishlist's total donation count
+2. Install dependencies:
+   ```bash
+   yarn install
+   ```
 
-## Account Structures
+3. Build the program:
+   ```bash
+   anchor build
+   ```
 
-### Wishlist Account
-```rust
-pub struct Wishlist {
-    pub authority: Pubkey,    // Creator of the wishlist
-    pub ipfs_url: String,     // IPFS URL for wishlist metadata
-    pub created_at: i64,      // Timestamp of creation
-    pub total_donations: u64, // Total donations received in tokens
-    pub token_mint: Pubkey,   // Token mint that this wishlist accepts
-}
-```
+## Deployment
 
-### CreateWishlist Context
-Defines the accounts needed for creating a wishlist:
-- `wishlist`: The new wishlist account (PDA)
-- `authority`: The signer creating the wishlist
-- `system_program`: Required for creating the account
+### Local Development
 
-### Donate Context
-Defines the accounts needed for donating:
-- `wishlist`: The wishlist receiving the donation
-- `donor`: The signer donating tokens
-- `donor_token_account`: The donor's token account
-- `platform_token_account`: The platform's token account
-- `platform`: The platform account
-- `token_program`: The SPL Token program
-- `associated_token_program`: The SPL Associated Token program
-- `system_program`: The System program
+1. Start a local Solana validator:
+   ```bash
+   solana-test-validator
+   ```
 
-## Error Handling
+2. Deploy the program:
+   ```bash
+   anchor deploy
+   ```
 
-The contract defines several custom error types:
-- `InvalidTokenAccount`: When a token account is invalid
-- `InsufficientBalance`: When the donor has insufficient tokens
-- `InvalidSwapParameters`: When swap parameters are invalid
-- `Overflow`: When arithmetic overflow occurs
-- `InvalidToken`: When trying to donate a token that doesn't match the wishlist's accepted token
+3. Run tests:
+   ```bash
+   anchor test
+   ```
 
-## Testing
+### Devnet/Mainnet Deployment
 
-The tests cover the following scenarios:
-1. Creating a wishlist with a specific token
-2. Donating tokens to a wishlist
-3. Ensuring only the correct token can be donated
+1. Configure your Solana CLI for the target network:
+   ```bash
+   solana config set --url devnet  # or mainnet-beta
+   ```
 
-## Getting Started
+2. Update the `Anchor.toml` file with your program ID and desired network.
 
-### Prerequisites
-- Rust
-- Solana CLI
-- Anchor Framework
-- Node.js and yarn/npm
+3. Deploy to the network:
+   ```bash
+   anchor deploy
+   ```
 
-### Building the Contract
-```bash
-# Clone the repository
-git clone (repo address)
-cd desirium-contract
+## Usage
 
-# Install dependencies
-yarn
-# or 
-npm install
-
-# Build the contract
-anchor build
-```
-
-### Running Tests
-```bash
-# Run the tests
-anchor test
-```
-
-### Deploying to Devnet
-```bash
-# Set Solana to devnet
-solana config set --url devnet
-
-# Deploy the program
-anchor deploy
-
-# Update the program ID
-# After deployment, update the program ID in lib.rs and Anchor.toml
-```
-
-## Interacting with the Contract
-
-After deployment, you can interact with the contract using the Anchor client or direct Solana transactions:
+### Initializing a Vault
 
 ```typescript
-// Example of creating a wishlist
+// Create a vault for a specific token with a target funding amount and IPFS link
 await program.methods
-  .createWishlist(ipfsUrl, tokenMint)
+  .initialize(
+    new anchor.BN(targetAmount),
+    "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"  // IPFS link to metadata
+  )
   .accounts({
-    wishlist: wishlistPda,
-    authority: wallet.publicKey,
+    vaultConfig: vaultConfigPda,
+    vaultTokenAccount: tokenVault,
+    tokenMint: mint,
+    signer: wallet.publicKey,
     systemProgram: SystemProgram.programId,
-  })
-  .signers([wallet])
-  .rpc();
-
-// Example of donating to a wishlist
-await program.methods
-  .donate(new BN(1000000)) // 1 token with 6 decimals
-  .accounts({
-    wishlist: wishlistPda,
-    donor: wallet.publicKey,
-    donorTokenAccount: donorTokenAccount,
-    platformTokenAccount: platformTokenAccount,
-    platform: platformPublicKey,
     tokenProgram: TOKEN_PROGRAM_ID,
-    associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-    systemProgram: SystemProgram.programId,
+    rent: anchor.web3.SYSVAR_RENT_PUBKEY,
   })
-  .signers([wallet])
   .rpc();
 ```
 
-## License
+### Depositing Tokens
 
-[MIT](LICENSE)
+```typescript
+// Deposit tokens into the vault
+await program.methods
+  .transferIn(new anchor.BN(amount))
+  .accounts({
+    vaultConfig: vaultConfigPda,
+    vaultTokenAccount: tokenVault,
+    senderTokenAccount: userTokenAccount,
+    protocolTokenAccount: protocolTokenAccount,
+    signer: wallet.publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  })
+  .rpc();
+```
+
+### Withdrawing Tokens
+
+```typescript
+// Withdraw tokens from the vault (includes 1% protocol fee)
+await program.methods
+  .transferOut(new anchor.BN(amount))
+  .accounts({
+    vaultConfig: vaultConfigPda,
+    vaultTokenAccount: tokenVault,
+    senderTokenAccount: userTokenAccount,
+    protocolTokenAccount: protocolTokenAccount,
+    signer: wallet.publicKey,
+    tokenProgram: TOKEN_PROGRAM_ID,
+  })
+  .rpc();
+```
+
+### Retrieving IPFS Link
+
+```typescript
+// Retrieve the IPFS link stored in the vault config
+const ipfsLink = await program.methods
+  .getIpfsLink()
+  .accounts({
+    vaultConfig: vaultConfigPda,
+  })
+  .view();
+
+console.log("Vault metadata IPFS link:", ipfsLink);
+// Example output: "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+```
+
+
+
+
+## Token Vault Architecture
+
+The program uses three primary accounts:
+
+1. **Vault Config**: Stores information about the vault including the token mint and target amount
+2. **Token Vault Account**: The actual SPL token account that holds the deposited tokens
+3. **Protocol Fee Account**: Associated token account for the protocol owner that receives the withdrawal fees
+
+PDAs (Program Derived Addresses) are used for secure, deterministic account creation:
+- Vault Config: `["vault_config"]`
+- Token Vault: `["token_vault", token_mint]`
+
+## Protocol Fees
+
+The contract implements a 1% fee on all withdrawals to sustain the protocol. This fee is automatically sent to the protocol owner's associated token account during withdrawal operations.
+
