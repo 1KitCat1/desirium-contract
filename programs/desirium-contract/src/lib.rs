@@ -7,9 +7,10 @@ declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
 pub mod token_vault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, target_amount: u64) -> Result<()> {
         let config = &mut ctx.accounts.vault_config;
         config.token_mint = ctx.accounts.token_mint.key();
+        config.target_amount = target_amount;
         config.bump = ctx.bumps.vault_config;
         Ok(())
     }
@@ -64,6 +65,7 @@ pub mod token_vault {
 #[account]
 pub struct VaultConfig {
     pub token_mint: Pubkey,
+    pub target_amount: u64,
     pub bump: u8,
 }
 
@@ -74,7 +76,7 @@ pub struct Initialize<'info> {
         payer = signer,
         seeds = [b"vault_config"],
         bump,
-        space = 8 + 32 + 1
+        space = 8 + 32 + 8 + 1 // discriminator + pubkey + u64 + u8
     )]
     pub vault_config: Account<'info, VaultConfig>,
 
