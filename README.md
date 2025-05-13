@@ -162,5 +162,5 @@ PDAs (Program Derived Addresses) are used for secure, deterministic account crea
 
 ## Protocol Fees
 
-The contract implements a 1% fee on all withdrawals to sustain the protocol. This fee is automatically sent to the protocol owner's associated token account during withdrawal operations.
+The contract implements a 1% fee on all withdrawals to sustain the protocol in case target amount is reached / 5% if not reached. This fee is automatically sent to the protocol owner's associated token account during withdrawal operations.
 
