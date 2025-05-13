@@ -2,7 +2,7 @@ import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
 import { DesiriumContract } from "../target/types/desirium_contract";
 import { PublicKey, Keypair, SystemProgram, LAMPORTS_PER_SOL } from "@solana/web3.js";
-import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createMint, createAccount, mintTo } from "@solana/spl-token";
+import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, createMint, createAccount, getAccount, mintTo } from "@solana/spl-token";
 import { assert } from "chai";
 
 describe("desirium-contract", () => {
@@ -19,10 +19,10 @@ describe("desirium-contract", () => {
   
   // Test data
   const ipfsUrl = "ipfs://QmTestHash";
-  const donationAmount = new anchor.BN(1000000); // 1 token with 6 decimals
+  const donationAmount = new anchor.BN(1000000); // 1 token (6 decimals)
   
   // Token accounts
-  let mint: PublicKey;
+  let tokenMint: PublicKey;
   let donorTokenAccount: PublicKey;
   let platformTokenAccount: PublicKey;
   let wishlistPda: PublicKey;
@@ -36,8 +36,8 @@ describe("desirium-contract", () => {
       await provider.connection.confirmTransaction(sig, "confirmed");
     }
     
-    // Create test token mint
-    mint = await createMint(
+    // Create a new token mint for testing
+    tokenMint = await createMint(
       provider.connection,
       authority,
       authority.publicKey,
@@ -45,18 +45,18 @@ describe("desirium-contract", () => {
       6
     );
     
-    // Create token accounts
+    // Create token accounts for donor and platform
     donorTokenAccount = await createAccount(
       provider.connection,
       donor,
-      mint,
+      tokenMint,
       donor.publicKey
     );
     
     platformTokenAccount = await createAccount(
       provider.connection,
       platform,
-      mint,
+      tokenMint,
       platform.publicKey
     );
     
@@ -64,10 +64,10 @@ describe("desirium-contract", () => {
     await mintTo(
       provider.connection,
       authority,
-      mint,
+      tokenMint,
       donorTokenAccount,
-      authority,
-      donationAmount.toNumber()
+      authority.publicKey,
+      10000000 // 10 tokens
     );
     
     // Find PDA for wishlist
@@ -79,7 +79,7 @@ describe("desirium-contract", () => {
 
   it("Creates a wishlist", async () => {
     const tx = await program.methods
-      .createWishlist(ipfsUrl)
+      .createWishlist(ipfsUrl, tokenMint)
       .accounts({
         wishlist: wishlistPda,
         authority: authority.publicKey,
@@ -97,9 +97,10 @@ describe("desirium-contract", () => {
     assert.equal(wishlist.authority.toString(), authority.publicKey.toString());
     assert.equal(wishlist.ipfsUrl, ipfsUrl);
     assert.equal(wishlist.totalDonations.toNumber(), 0);
+    assert.equal(wishlist.tokenMint.toString(), tokenMint.toString());
   });
 
-  it("Accepts donations", async () => {
+  it("Accepts donations in the specified token", async () => {
     const tx = await program.methods
       .donate(donationAmount)
       .accounts({
@@ -127,18 +128,45 @@ describe("desirium-contract", () => {
     const donorBalance = await provider.connection.getTokenAccountBalance(donorTokenAccount);
     const platformBalance = await provider.connection.getTokenAccountBalance(platformTokenAccount);
     
-    assert.equal(donorBalance.value.amount, "0");
+    assert.equal(donorBalance.value.amount, "9000000"); // 10 - 1 = 9 tokens
     assert.equal(platformBalance.value.amount, donationAmount.toString());
   });
 
-  it("Fails when donor has insufficient balance", async () => {
+  it("Fails when trying to donate with a different token", async () => {
+    // Create a different token mint
+    const differentMint = await createMint(
+      provider.connection,
+      authority,
+      authority.publicKey,
+      null,
+      6
+    );
+    
+    // Create a token account for donor with the different token
+    const differentTokenAccount = await createAccount(
+      provider.connection,
+      donor,
+      differentMint,
+      donor.publicKey
+    );
+    
+    // Mint some of the different token to donor
+    await mintTo(
+      provider.connection,
+      authority,
+      differentMint,
+      differentTokenAccount,
+      authority.publicKey,
+      10000000 // 10 tokens
+    );
+    
     try {
       await program.methods
         .donate(donationAmount)
         .accounts({
           wishlist: wishlistPda,
           donor: donor.publicKey,
-          donorTokenAccount: donorTokenAccount,
+          donorTokenAccount: differentTokenAccount, // Using different token
           platformTokenAccount: platformTokenAccount,
           platform: platform.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
@@ -150,7 +178,7 @@ describe("desirium-contract", () => {
       
       assert.fail("Expected transaction to fail");
     } catch (error) {
-      assert.include(error.message, "insufficient funds");
+      assert.include(error.message, "A raw constraint was violated");
     }
   });
 });
