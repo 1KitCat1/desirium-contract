@@ -8,12 +8,18 @@ pub mod token_vault {
     use super::*;
 
     pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
-        // Initialization logic can be added here if needed.
+        let config = &mut ctx.accounts.vault_config;
+        config.token_mint = ctx.accounts.token_mint.key();
+        config.bump = ctx.bumps.vault_config;
         Ok(())
     }
 
     pub fn transfer_in(ctx: Context<TransferAccounts>, amount: u64) -> Result<()> {
-        msg!("Token amount transfer in: {}!", amount);
+        require_keys_eq!(
+            ctx.accounts.sender_token_account.mint,
+            ctx.accounts.vault_config.token_mint,
+            VaultError::InvalidMint
+        );
 
         let cpi_accounts = Transfer {
             from: ctx.accounts.sender_token_account.to_account_info(),
@@ -21,62 +27,68 @@ pub mod token_vault {
             authority: ctx.accounts.signer.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-
-        let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-        anchor_spl::token::transfer(cpi_ctx, amount)?;
-
-        Ok(())
+        anchor_spl::token::transfer(
+            CpiContext::new(ctx.accounts.token_program.to_account_info(), cpi_accounts),
+            amount,
+        )
     }
 
     pub fn transfer_out(ctx: Context<TransferAccounts>, amount: u64) -> Result<()> {
-        msg!("Token amount transfer out: {}!", amount);
+        require_keys_eq!(
+            ctx.accounts.sender_token_account.mint,
+            ctx.accounts.vault_config.token_mint,
+            VaultError::InvalidMint
+        );
 
-        let bump = ctx.bumps.token_account_owner_pda;
-
-        let seeds = &[b"token_account_owner_pda".as_ref(), &[bump]];
-        let signer_seeds = &[&seeds[..]];
+        let bump = ctx.accounts.vault_config.bump;
+        let seeds = &[b"vault_config".as_ref(), &[bump]];
+        let signer = &[&seeds[..]];
 
         let cpi_accounts = Transfer {
             from: ctx.accounts.vault_token_account.to_account_info(),
             to: ctx.accounts.sender_token_account.to_account_info(),
-            authority: ctx.accounts.token_account_owner_pda.to_account_info(),
+            authority: ctx.accounts.vault_config.to_account_info(),
         };
 
-        let cpi_program = ctx.accounts.token_program.to_account_info();
-
-        let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
-
-        anchor_spl::token::transfer(cpi_ctx, amount)?;
-
-        Ok(())
+        anchor_spl::token::transfer(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                cpi_accounts,
+                signer,
+            ),
+            amount,
+        )
     }
+}
+
+#[account]
+pub struct VaultConfig {
+    pub token_mint: Pubkey,
+    pub bump: u8,
 }
 
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    /// CHECK: This is a PDA derived with a known seed and bump, used as authority.
     #[account(
         init,
         payer = signer,
-        seeds = [b"token_account_owner_pda"],
+        seeds = [b"vault_config"],
         bump,
-        space = 8
+        space = 8 + 32 + 1
     )]
-    pub token_account_owner_pda: AccountInfo<'info>,
+    pub vault_config: Account<'info, VaultConfig>,
 
     #[account(
         init,
         payer = signer,
-        seeds = [b"token_vault", mint_of_token_being_sent.key().as_ref()],
+        seeds = [b"token_vault", token_mint.key().as_ref()],
         bump,
-        token::mint = mint_of_token_being_sent,
-        token::authority = token_account_owner_pda,
+        token::mint = token_mint,
+        token::authority = vault_config,
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
 
-    pub mint_of_token_being_sent: Account<'info, Mint>,
+    pub token_mint: Account<'info, Mint>,
 
     #[account(mut)]
     pub signer: Signer<'info>,
@@ -88,32 +100,35 @@ pub struct Initialize<'info> {
 
 #[derive(Accounts)]
 pub struct TransferAccounts<'info> {
-    /// CHECK: This is a PDA derived with a known seed and bump, used as authority.
     #[account(
-        mut,
-        seeds = [b"token_account_owner_pda"],
-        bump,
+        seeds = [b"vault_config"],
+        bump = vault_config.bump,
     )]
-    pub token_account_owner_pda: AccountInfo<'info>,
+    pub vault_config: Account<'info, VaultConfig>,
 
     #[account(
         mut,
-        seeds = [b"token_vault", mint_of_token_being_sent.key().as_ref()],
+        seeds = [b"token_vault", vault_config.token_mint.as_ref()],
         bump,
-        token::mint = mint_of_token_being_sent,
-        token::authority = token_account_owner_pda,
+        token::mint = vault_config.token_mint,
+        token::authority = vault_config,
     )]
     pub vault_token_account: Account<'info, TokenAccount>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        constraint = sender_token_account.mint == vault_config.token_mint
+    )]
     pub sender_token_account: Account<'info, TokenAccount>,
-
-    pub mint_of_token_being_sent: Account<'info, Mint>,
 
     #[account(mut)]
     pub signer: Signer<'info>,
 
-    pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-    pub rent: Sysvar<'info, Rent>,
+}
+
+#[error_code]
+pub enum VaultError {
+    #[msg("Token mint mismatch with vault configuration")]
+    InvalidMint,
 }

@@ -2,8 +2,10 @@
 package_manager = "yarn"
 
 [features]
-resolution = true
+resolution = false
 skip-lint = false
+seeds = true
+
 
 [programs.localnet]
 desirium_contract = "6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5"
