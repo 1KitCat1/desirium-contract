@@ -24,7 +24,7 @@ describe("token_vault", () => {
 
   const decimals = 9;
   const mintDecimals = BigInt(10 ** decimals);
-  const targetAmount = BigInt(10 * 10 ** decimals); // Set target to 10 tokens
+  const targetAmount = BigInt(200 * 10 ** decimals); // Set target to 10 tokens
 
   let mint: PublicKey;
   let vaultConfigPda: PublicKey;
@@ -71,7 +71,7 @@ describe("token_vault", () => {
     );
 
     // Mint tokens to users
-    await mintTo(mint, user1TokenAccount, 100 * 10 ** decimals, provider);
+    await mintTo(mint, user1TokenAccount, 200 * 10 ** decimals, provider);
     await mintTo(mint, user2TokenAccount, 100 * 10 ** decimals, provider);
 
     // Create protocol token account using the same mint
@@ -126,15 +126,15 @@ describe("token_vault", () => {
 
   it("User1 transfers tokens into vault", async () => {
     // Convert amount to Anchor's BN type
-    const amount = new anchor.BN((1 * 10 ** decimals).toString());
+    const amount = new anchor.BN((100 * 10 ** decimals).toString());
 
     await program.methods
-      .transferIn(new anchor.BN(1 * 10 ** decimals))
+      .transferIn(new anchor.BN(100 * 10 ** decimals))
       .accounts({
         vaultConfig: vaultConfigPda,
         vaultTokenAccount: tokenVault,
         senderTokenAccount: user1TokenAccount,
-        protocolTokenAccount: protocolTokenAccount, // Added
+        protocolTokenAccount: protocolTokenAccount,
         signer: user1.publicKey,
         tokenProgram: TOKEN_PROGRAM_ID,
       })
@@ -144,8 +144,10 @@ describe("token_vault", () => {
     const userBalance = await getAccountBalance(user1TokenAccount);
     const vaultBalance = await getAccountBalance(tokenVault);
 
-    assert.equal(userBalance, BigInt(99), "User1 should have 99 tokens left");
-    assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token");
+    // NOTE: USER 200 -> 100
+    // NOTE: VAULT 0 -> 100
+    assert.equal(userBalance, BigInt(100), "User1 should have 100 tokens left");
+    assert.equal(vaultBalance, BigInt(100), "Vault should have 100 tokens");
   });
 
   it("User2 transfers tokens into vault", async () => {
@@ -168,8 +170,10 @@ describe("token_vault", () => {
     const userBalance = await getAccountBalance(user2TokenAccount);
     const vaultBalance = await getAccountBalance(tokenVault);
 
+    // NOTE: USER2: 100 -> 99
+    // NOTE: VAULT: 100 -> 101
     assert.equal(userBalance, BigInt(99), "User2 should have 99 tokens left");
-    assert.equal(vaultBalance, BigInt(2), "Vault should have 2 tokens");
+    assert.equal(vaultBalance, BigInt(101), "Vault should have 2 tokens");
   });
 
   it("Checks funding progress against target", async () => {
@@ -240,7 +244,7 @@ describe("token_vault", () => {
 
   it("Transfer out tokens", async () => {
     // Convert amount to Anchor's BN type
-    const amount = new anchor.BN((1 * 10 ** decimals).toString());
+    const amount = new anchor.BN((100 * 10 ** decimals).toString());
 
     await program.methods
       .transferOut(amount)
@@ -257,7 +261,11 @@ describe("token_vault", () => {
     const userBalance = await getAccountBalance(user1TokenAccount);
     const vaultBalance = await getAccountBalance(tokenVault);
 
-    assert.equal(userBalance, BigInt(99), "User should have 99 tokens");
+    // NOTE: because of the commision user will receive back less tokens
+    // NOTE: USER1: 100 -> 199
+    // NOTE: VAULT: 101 -> 1
+    // NOTE: PROTOCOL: 0 -> 1
+    assert.equal(userBalance, BigInt(199), "User should have 199 tokens");
     assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token left");
   });
 
