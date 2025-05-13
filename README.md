@@ -17,7 +17,7 @@ The Desirium contract has the following key components:
    - Total donations received
    - Token mint address that the wishlist accepts
 
-2. **Platform Account**: Acts as an intermediary to collect tokens from donors before they are swapped and sent to the wishlist owner.
+2. **Platform Account**: Acts as an intermediary to collect tokens from donors before they are sent to the wishlist owner.
 
 ## Contract Functions
 
@@ -32,7 +32,7 @@ Creates a new wishlist with the specified IPFS URL and token mint. The creator b
 pub fn donate(ctx: Context<Donate>, amount: u64) -> Result<()>
 ```
 Allows users to donate tokens to a wishlist. The function:
-- Verifies that the token being donated matches the wishlist's accepted token
+- Verifies that the token being donated matches the wishlist's accepted token (*token_mint* parameter)
 - Checks that the donor has sufficient balance
 - Transfers tokens from the donor to the platform account
 - Updates the wishlist's total donation count
@@ -89,7 +89,7 @@ The tests cover the following scenarios:
 - Rust
 - Solana CLI
 - Anchor Framework
-- Node.js and npm
+- Node.js and yarn/npm
 
 ### Building the Contract
 ```bash
@@ -98,7 +98,9 @@ git clone (repo address)
 cd desirium-contract
 
 # Install dependencies
-yarn install
+yarn
+# or 
+npm install
 
 # Build the contract
 anchor build
