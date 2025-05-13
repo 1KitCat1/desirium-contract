@@ -262,10 +262,10 @@ describe("token_vault", () => {
     const vaultBalance = await getAccountBalance(tokenVault);
 
     // NOTE: because of the commision user will receive back less tokens
-    // NOTE: USER1: 100 -> 199
+    // NOTE: USER1: 100 -> 195
     // NOTE: VAULT: 101 -> 1
     // NOTE: PROTOCOL: 0 -> 1
-    assert.equal(userBalance, BigInt(199), "User should have 199 tokens");
+    assert.equal(userBalance, BigInt(195), "User should have 195 tokens");
     assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token left");
   });
 

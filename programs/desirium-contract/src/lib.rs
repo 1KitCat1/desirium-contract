@@ -6,7 +6,8 @@ use anchor_spl::{associated_token::get_associated_token_address, token::{Mint, T
 declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
 
 pub const PROTOCOL_OWNER: &str = "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU";
-pub const COMMISSION_BPS: u64 = 100; // 1% (100 basis points)
+pub const COMMISSION_BPS_ABOVE_TARGET: u64 = 100; // 1% (100 basis points)
+pub const COMMISSION_BPS_BELOW_TARGET: u64 = 500; // 5%
 pub const BPS_DENOMINATOR: u64 = 10_000;
 
 
@@ -48,9 +49,19 @@ pub mod token_vault {
             VaultError::InvalidMint
         );
     
-        // Calculate commission (1%)
+        // Get current vault balance
+        let vault_balance = ctx.accounts.vault_token_account.amount;
+    
+        // Choose commission rate
+        let commission_bps = if vault_balance >= ctx.accounts.vault_config.target_amount {
+            COMMISSION_BPS_ABOVE_TARGET // 1%
+        } else {
+            COMMISSION_BPS_BELOW_TARGET // 5%
+        };
+    
+        // Calculate commission and user amount
         let commission = amount
-            .checked_mul(COMMISSION_BPS)
+            .checked_mul(commission_bps)
             .unwrap()
             .checked_div(BPS_DENOMINATOR)
             .unwrap();
@@ -93,6 +104,7 @@ pub mod token_vault {
     
         Ok(())
     }
+    
 }
 
 #[account]
