@@ -129,6 +129,40 @@ describe("token_vault", () => {
     assert.equal(vaultBalance, BigInt(2), "Vault should have 2 tokens");
   });
 
+  it("Fails when user tries to fund vault with incorrect token mint", async () => {
+    // Create a second mint (wrong mint)
+    const wrongMint = await createMint(decimals, provider);
+  
+    // Create token account for user1 with wrong mint
+    const wrongTokenAccount = await createTokenAccountIfNeeded(wrongMint, user1.publicKey, provider);
+  
+    // Mint tokens to wrong token account
+    await mintTo(wrongMint, wrongTokenAccount, 100 * 10 ** decimals, provider);
+  
+    // Attempt transferIn with wrong token account - should fail constraint check
+    try {
+      await program.methods.transferIn(new anchor.BN(1 * 10 ** decimals))
+        .accounts({
+          vaultConfig: vaultConfigPda,
+          vaultTokenAccount: tokenVault,
+          senderTokenAccount: wrongTokenAccount,
+          signer: user1.publicKey,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+  
+      assert.fail("transferIn should have failed due to mint mismatch constraint");
+    } catch (error: any) {
+      const errMsg = error.error?.msg ?? error.toString();
+      // Anchor constraint raw error code is 2003
+      assert.ok(
+        errMsg.includes("A raw constraint was violated") || errMsg.includes("ConstraintRaw"),
+        `Expected raw constraint error, got: ${errMsg}`
+      );
+    }
+  });
+  
   it("Transfer out tokens", async () => {
     await program.methods
       .transferOut(new anchor.BN(1 * 10 ** decimals))
