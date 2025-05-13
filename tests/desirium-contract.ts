@@ -25,7 +25,7 @@ describe("token_vault", () => {
   const decimals = 9;
   const mintDecimals = BigInt(10 ** decimals);
   const targetAmount = BigInt(200 * 10 ** decimals); // Set target to 10 tokens
-
+  const ipfsStr = "ipfs://HAsh";
   let mint: PublicKey;
   let vaultConfigPda: PublicKey;
   let tokenVault: PublicKey;
@@ -97,7 +97,7 @@ describe("token_vault", () => {
     const targetAmountBN = new anchor.BN(targetAmount.toString());
 
     const tx = await program.methods
-      .initialize(targetAmountBN)
+      .initialize(targetAmountBN, ipfsStr)
       .accounts({
         vaultConfig: vaultConfigPda,
         vaultTokenAccount: tokenVault,
@@ -110,6 +110,10 @@ describe("token_vault", () => {
       .rpc();
 
     console.log("Initialize tx:", tx);
+    const ipfsLink = await program.account.vaultConfig
+      .fetch(vaultConfigPda)
+      .then((acct) => acct.ipfsLink);
+    console.log("IPFS link:", ipfsLink);
 
     // Verify vault is empty
     const vaultAccount = await getAccount(provider.connection, tokenVault);

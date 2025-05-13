@@ -15,11 +15,13 @@ pub const BPS_DENOMINATOR: u64 = 10_000;
 pub mod token_vault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, target_amount: u64) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, target_amount: u64, ipfs_link: String) -> Result<()> {
         let config = &mut ctx.accounts.vault_config;
         config.token_mint = ctx.accounts.token_mint.key();
         config.target_amount = target_amount;
         config.bump = ctx.bumps.vault_config;
+        require!(ipfs_link.len() <= 200, VaultError::IpfsLinkTooLong);
+        config.ipfs_link = ipfs_link;
         Ok(())
     }
 
@@ -104,7 +106,9 @@ pub mod token_vault {
     
         Ok(())
     }
-    
+    pub fn get_ipfs_link(ctx: Context<GetIpfsLink>) -> Result<String> {
+        Ok(ctx.accounts.vault_config.ipfs_link.clone())
+    }
 }
 
 #[account]
@@ -112,6 +116,7 @@ pub struct VaultConfig {
     pub token_mint: Pubkey,
     pub target_amount: u64,
     pub bump: u8,
+    pub ipfs_link: String,
 }
 
 #[derive(Accounts)]
@@ -121,7 +126,7 @@ pub struct Initialize<'info> {
         payer = signer,
         seeds = [b"vault_config"],
         bump,
-        space = 8 + 32 + 8 + 1 // discriminator + pubkey + u64 + u8
+        space = 8 + 32 + 8 + 1 + 4 + 200 // discriminator + pubkey + u64 + u8 + str
     )]
     pub vault_config: Account<'info, VaultConfig>,
 
@@ -143,6 +148,12 @@ pub struct Initialize<'info> {
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct GetIpfsLink<'info> {
+    #[account(seeds = [b"vault_config"], bump = vault_config.bump)]
+    pub vault_config: Account<'info, VaultConfig>,
 }
 
 #[derive(Accounts)]
@@ -189,4 +200,6 @@ pub struct TransferAccounts<'info> {
 pub enum VaultError {
     #[msg("Token mint mismatch with vault configuration")]
     InvalidMint,
+    #[msg("IPFS link too long")]
+    IpfsLinkTooLong
 }
