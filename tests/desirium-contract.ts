@@ -1,336 +1,179 @@
 import * as anchor from "@coral-xyz/anchor";
 import { Program } from "@coral-xyz/anchor";
-import { DesiriumContract } from "../target/types/desirium_contract";
+import { Keypair, PublicKey, SystemProgram } from "@solana/web3.js";
 import {
-  PublicKey,
-  Keypair,
-  SystemProgram,
-  LAMPORTS_PER_SOL,
-} from "@solana/web3.js";
-import {
-  TOKEN_PROGRAM_ID,
-  ASSOCIATED_TOKEN_PROGRAM_ID,
-  createMint,
-  createAccount,
+  createAssociatedTokenAccountInstruction,
+  createInitializeMintInstruction,
+  createMintToInstruction,
   getAccount,
-  mintTo,
   getAssociatedTokenAddressSync,
-  createAssociatedTokenAccount,
+  getMinimumBalanceForRentExemptMint,
+  MINT_SIZE,
+  TOKEN_PROGRAM_ID,
 } from "@solana/spl-token";
 import { assert } from "chai";
 
-describe("desirium-contract", () => {
+describe("token_vault", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
-  const program = anchor.workspace.DesiriumContract as Program<DesiriumContract>;
+  const program = anchor.workspace.TokenVault as Program;
 
-  // Test accounts
-  const authority = Keypair.generate();
-  const donor = Keypair.generate();
-  const platform = Keypair.generate();
+  const decimals = 9;
+  const mintDecimals = BigInt(10 ** decimals);
 
-  // Test data
-  const ipfsUrl = "ipfs://QmTestHash";
-  const donationAmount = new anchor.BN(1000000);
-
-  // Token accounts
-  let tokenMint: PublicKey;
-  let donorTokenAccount: PublicKey;
-  let platformTokenAccount: PublicKey;
-  let wishlistPda: PublicKey;
-  let wishlistBump: number;
-  let vaultPda: PublicKey;
-  let vaultBump: number;
-  let vaultTokenAccount: PublicKey;
-  let authorityTokenAccount: PublicKey;
+  let mint: PublicKey;
+  let tokenAccount: PublicKey;
+  let tokenVault: PublicKey;
+  let tokenAccountOwnerPda: PublicKey;
 
   before(async () => {
-    console.log(0.1)
-    // Airdrop SOL to test accounts
-    const airdropAmount = LAMPORTS_PER_SOL;
-    for (const kp of [authority, donor, platform]) {
-      const sig = await provider.connection.requestAirdrop(
-        kp.publicKey,
-        airdropAmount
-      );
-      await provider.connection.confirmTransaction(sig, "confirmed");
-    }
-    console.log(0.2)
-
-    // Create token mint
-    tokenMint = await createMint(
-      provider.connection,
-      authority,
-      authority.publicKey,
-      null,
-      6
-    );
-
-    console.log(0.3)
-
-
-    // Create donor and platform token accounts
-    donorTokenAccount = await createAccount(
-      provider.connection,
-      donor,
-      tokenMint,
-      donor.publicKey
-    );
-    console.log(0.4)
-
-    platformTokenAccount = await createAccount(
-      provider.connection,
-      platform,
-      tokenMint,
-      platform.publicKey
-    );
-    console.log(0.5)
-
-
-    // Mint tokens to donor
-    await mintTo(
-      provider.connection,
-      authority,
-      tokenMint,
-      donorTokenAccount,
-      authority.publicKey,
-      10000000
-    );
-    console.log(0.6)
-
-    // Setup authority's ATA
-    authorityTokenAccount = getAssociatedTokenAddressSync(
-      tokenMint,
-      authority.publicKey
-    );
-
-    console.log(0.7)
-
-    if (!(await provider.connection.getAccountInfo(authorityTokenAccount))) {
-      await createAssociatedTokenAccount(
-        provider.connection,
-        authority,
-        tokenMint,
-        authority.publicKey
-      );
-    }
-
-    console.log(0.8)
-
-
-    // Find PDAs
-    console.log("program.programId:", program.programId?.toBase58());
-
-    [wishlistPda, wishlistBump] = await PublicKey.findProgramAddress(
-      [Buffer.from("wishlist"), authority.publicKey.toBuffer()],
+    // Create mint
+    mint = await createMint(decimals, provider);
+    
+    // Derive PDAs
+    [tokenAccountOwnerPda] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_account_owner_pda")],
       program.programId
     );
-    console.log(0.9)
-
-
-    console.log("program.programId:", program.programId?.toBase58());
-
-    const [vaultPda, vaultBump] = await PublicKey.findProgramAddress(
-      [Buffer.from("vault"), authority.publicKey.toBuffer()],
+    
+    [tokenVault] = PublicKey.findProgramAddressSync(
+      [Buffer.from("token_vault"), mint.toBuffer()],
       program.programId
     );
 
-    console.log(1)
-    // Create vault token account (PDA-owned ATA)
-    vaultTokenAccount = getAssociatedTokenAddressSync(
-      tokenMint,
-      vaultPda,
-      true // Allow off-curve owner
-    );
-    console.log(1.1)
+    // Get or create user's token account
+    tokenAccount = await createTokenAccountIfNeeded(mint, provider.wallet.publicKey, provider);
+  });
 
-    const vaultTokenAccountKeypair = Keypair.generate();
-    vaultTokenAccount = vaultTokenAccountKeypair.publicKey;
+  it("Initialize vault", async () => {
+    const tx = await program.methods.initialize().accounts({
+      tokenAccountOwnerPda,
+      vaultTokenAccount: tokenVault,
+      mintOfTokenBeingSent: mint,
+      signer: provider.wallet.publicKey,
+      systemProgram: SystemProgram.programId,
+      tokenProgram: TOKEN_PROGRAM_ID,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    }).rpc();
 
-    await createAccount(
-      provider.connection,
-      authority, // payer
-      tokenMint,
-      vaultPda, // owner PDA (off-curve)
-      vaultTokenAccountKeypair // new token account keypair
-    );
+    console.log("Initialize tx:", tx);
     
-    console.log(1.2)
-
-    // Fund vault token account
-    await mintTo(
-      provider.connection,
-      authority,
-      tokenMint,
-      vaultTokenAccount,
-      authority.publicKey,
-      10_000_000
-    );
-    console.log(1.3)
-
+    const vaultAccount = await getAccount(provider.connection, tokenVault);
+    assert.equal(vaultAccount.amount, BigInt(0), "Vault should start with 0 balance");
   });
 
+  it("Transfer in tokens", async () => {
+    // Mint 100 tokens to user
+    await mintTo(mint, tokenAccount, 100 * 10 ** decimals, provider);
 
-  it("Creates a wishlist", async () => {
-    const tx = await program.methods
-      .createWishlist(ipfsUrl, tokenMint)
-      .accounts({
-        wishlist: wishlistPda,
-        authority: authority.publicKey,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([authority])
-      .rpc();
+    const initialBalance = await getAccountBalance(tokenAccount);
+    assert.equal(initialBalance, BigInt(100), "User should have 100 tokens initially");
 
-    console.log("Wishlist creation tx:", tx);
+    // Transfer 1 token to vault
+    await program.methods.transferIn(new anchor.BN(1 * 10 ** decimals)).accounts({
+      tokenAccountOwnerPda,
+      vaultTokenAccount: tokenVault,
+      senderTokenAccount: tokenAccount,
+      mintOfTokenBeingSent: mint,
+      signer: provider.wallet.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).rpc();
 
-    // Fetch the created wishlist
-    const wishlist = await program.account.wishlist.fetch(wishlistPda);
-
-    // Verify wishlist data
-    assert.equal(wishlist.authority.toString(), authority.publicKey.toString());
-    assert.equal(wishlist.ipfsUrl, ipfsUrl);
-    assert.equal(wishlist.totalDonations.toNumber(), 0);
-    assert.equal(wishlist.tokenMint.toString(), tokenMint.toString());
-  });
-
-  it("Accepts donations in the specified token", async () => {
-    const tx = await program.methods
-      .donate(donationAmount)
-      .accounts({
-        wishlist: wishlistPda,
-        donor: donor.publicKey,
-        donorTokenAccount: donorTokenAccount,
-        platformTokenAccount: platformTokenAccount,
-        platform: platform.publicKey,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-      })
-      .signers([donor])
-      .rpc();
-
-    console.log("Donation tx:", tx);
-
-    // Fetch the updated wishlist
-    const wishlist = await program.account.wishlist.fetch(wishlistPda);
-
-    // Verify donation was recorded
-    assert.equal(wishlist.totalDonations.toNumber(), donationAmount.toNumber());
-
-    // Verify token balances
-    const donorBalance = await provider.connection.getTokenAccountBalance(
-      donorTokenAccount
-    );
-    const platformBalance = await provider.connection.getTokenAccountBalance(
-      platformTokenAccount
-    );
-
-    assert.equal(donorBalance.value.amount, "9000000"); // 10 - 1 = 9 tokens
-    assert.equal(platformBalance.value.amount, donationAmount.toString());
-  });
-
-  it("Fails when trying to donate with a different token", async () => {
-    // Create a different token mint
-    const differentMint = await createMint(
-      provider.connection,
-      authority,
-      authority.publicKey,
-      null,
-      6
-    );
-
-    // Create a token account for donor with the different token
-    const differentTokenAccount = await createAccount(
-      provider.connection,
-      donor,
-      differentMint,
-      donor.publicKey
-    );
-
-    // Mint some of the different token to donor
-    await mintTo(
-      provider.connection,
-      authority,
-      differentMint,
-      differentTokenAccount,
-      authority.publicKey,
-      10000000 // 10 tokens
-    );
-
-    try {
-      await program.methods
-        .donate(donationAmount)
-        .accounts({
-          wishlist: wishlistPda,
-          donor: donor.publicKey,
-          donorTokenAccount: differentTokenAccount, // Using different token
-          platformTokenAccount: platformTokenAccount,
-          platform: platform.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-          associatedTokenProgram: ASSOCIATED_TOKEN_PROGRAM_ID,
-          systemProgram: SystemProgram.programId,
-        })
-        .signers([donor])
-        .rpc();
-
-      assert.fail("Expected transaction to fail");
-    } catch (error) {
-      assert.include(error.message, "A raw constraint was violated");
-    }
-  });
-
-  it("Withdraws tokens from vault to authority", async () => {
-    const withdrawAmount = new anchor.BN(3_000_000);
+    // Verify balances
+    const userBalance = await getAccountBalance(tokenAccount);
+    const vaultBalance = await getAccountBalance(tokenVault);
     
-    await program.methods
-      .withdraw(withdrawAmount)
-      .accounts({
-        vault: vaultTokenAccount,
-        authority: authority.publicKey,
-        authorityTokenAccount: authorityTokenAccount,
-        tokenMint: tokenMint,
-        tokenProgram: TOKEN_PROGRAM_ID,
-      })
-      .signers([authority])
-      .rpc();
-
-    // Check balances
-    const vaultBalance = await getAccount(
-      provider.connection,
-      vaultTokenAccount
-    );
-    const authorityBalance = await getAccount(
-      provider.connection,
-      authorityTokenAccount
-    );
-
-    assert.equal(vaultBalance.amount.toString(), "7000000");
-    assert.equal(authorityBalance.amount.toString(), "3000000");
+    assert.equal(userBalance, BigInt(99), "User should have 99 tokens after transfer");
+    assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token after transfer");
   });
 
-  it("Fails to withdraw more tokens than vault balance", async () => {
-    const vaultBalance = await getAccount(
-      provider.connection,
-      vaultTokenAccount
-    );
-    const withdrawAmount = new anchor.BN(Number(vaultBalance.amount) + 1);
+  it("Transfer out tokens", async () => {
+    // Withdraw 1 token from vault
+    await program.methods.transferOut(new anchor.BN(1 * 10 ** decimals)).accounts({
+      tokenAccountOwnerPda,
+      vaultTokenAccount: tokenVault,
+      senderTokenAccount: tokenAccount,
+      mintOfTokenBeingSent: mint,
+      signer: provider.wallet.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).rpc();
 
-    try {
-      await program.methods
-        .withdraw(withdrawAmount)
-        .accounts({
-          vault: vaultTokenAccount,
-          authority: authority.publicKey,
-          authorityTokenAccount: authorityTokenAccount,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([authority])
-        .rpc();
-
-      assert.fail("Expected withdrawal to fail due to insufficient balance");
-    } catch (error) {
-      assert.include(error.message, "Insufficient balance");
-    }
+    // Verify balances
+    const userBalance = await getAccountBalance(tokenAccount);
+    const vaultBalance = await getAccountBalance(tokenVault);
+    
+    assert.equal(userBalance, BigInt(100), "User should have 100 tokens after withdrawal");
+    assert.equal(vaultBalance, BigInt(0), "Vault should be empty after withdrawal");
   });
+
+  async function getAccountBalance(account: PublicKey): Promise<bigint> {
+    const acc = await getAccount(provider.connection, account);
+    return acc.amount / mintDecimals;
+  }
 });
+
+async function createMint(decimals: number, provider: anchor.AnchorProvider): Promise<PublicKey> {
+  const mintKeypair = Keypair.generate();
+  const mint = mintKeypair.publicKey;
+  const lamports = await getMinimumBalanceForRentExemptMint(provider.connection);
+
+  const tx = new anchor.web3.Transaction().add(
+    SystemProgram.createAccount({
+      fromPubkey: provider.wallet.publicKey,
+      newAccountPubkey: mint,
+      space: MINT_SIZE,
+      lamports,
+      programId: TOKEN_PROGRAM_ID,
+    }),
+    createInitializeMintInstruction(
+      mint,
+      decimals,
+      provider.wallet.publicKey,
+      provider.wallet.publicKey
+    )
+  );
+
+  await provider.sendAndConfirm(tx, [mintKeypair]);
+  return mint;
+}
+
+async function createTokenAccountIfNeeded(
+  mint: PublicKey,
+  owner: PublicKey,
+  provider: anchor.AnchorProvider
+): Promise<PublicKey> {
+  const tokenAccount = getAssociatedTokenAddressSync(mint, owner);
+  
+  const accountInfo = await provider.connection.getAccountInfo(tokenAccount);
+  if (!accountInfo) {
+    const tx = new anchor.web3.Transaction().add(
+      createAssociatedTokenAccountInstruction(
+        provider.wallet.publicKey,
+        tokenAccount,
+        owner,
+        mint
+      )
+    );
+    await provider.sendAndConfirm(tx);
+  }
+  
+  return tokenAccount;
+}
+
+async function mintTo(
+  mint: PublicKey,
+  destination: PublicKey,
+  amount: number,
+  provider: anchor.AnchorProvider
+) {
+  const tx = new anchor.web3.Transaction().add(
+    createMintToInstruction(
+      mint,
+      destination,
+      provider.wallet.publicKey,
+      amount
+    )
+  );
+
+  await provider.sendAndConfirm(tx);
+}
