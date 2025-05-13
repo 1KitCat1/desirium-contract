@@ -9,6 +9,7 @@ Desirium Token Vault is a Solana smart contract built with Anchor that allows us
 ## Features
 
 - **Vault Initialization**: Create a vault with a specified funding target for any SPL token
+- **IPFS Link Management**: Store and retrieve IPFS links for vault configurations, allowing for storage and retrieval of metadata.
 - **Token Deposits**: Deposit tokens into the vault from any compatible token account
 - **Token Withdrawals**: Withdraw tokens with automatic protocol fee handling (1% commission)
 - **Target Amount Tracking**: Monitor progress towards funding goals
@@ -77,9 +78,12 @@ Desirium Token Vault is a Solana smart contract built with Anchor that allows us
 ### Initializing a Vault
 
 ```typescript
-// Create a vault for a specific token with a target funding amount
+// Create a vault for a specific token with a target funding amount and IPFS link
 await program.methods
-  .initialize(new anchor.BN(targetAmount))
+  .initialize(
+    new anchor.BN(targetAmount),
+    "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"  // IPFS link to metadata
+  )
   .accounts({
     vaultConfig: vaultConfigPda,
     vaultTokenAccount: tokenVault,
@@ -125,6 +129,24 @@ await program.methods
   })
   .rpc();
 ```
+
+### Retrieving IPFS Link
+
+```typescript
+// Retrieve the IPFS link stored in the vault config
+const ipfsLink = await program.methods
+  .getIpfsLink()
+  .accounts({
+    vaultConfig: vaultConfigPda,
+  })
+  .view();
+
+console.log("Vault metadata IPFS link:", ipfsLink);
+// Example output: "ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+```
+
+
+
 
 ## Token Vault Architecture
 
