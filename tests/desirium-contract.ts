@@ -26,6 +26,12 @@ describe("token_vault", () => {
   let tokenVault: PublicKey;
   let tokenAccountOwnerPda: PublicKey;
 
+   // Two users
+   let user1: Keypair;
+   let user2: Keypair;
+   let user1TokenAccount: PublicKey;
+   let user2TokenAccount: PublicKey;
+
   before(async () => {
     // Create mint
     mint = await createMint(decimals, provider);
@@ -43,6 +49,23 @@ describe("token_vault", () => {
 
     // Get or create user's token account
     tokenAccount = await createTokenAccountIfNeeded(mint, provider.wallet.publicKey, provider);
+
+
+    user1 = Keypair.generate();
+    user2 = Keypair.generate();
+
+    // Airdrop SOL to users so they can pay fees
+    await airdropSol(user1.publicKey, provider);
+    await airdropSol(user2.publicKey, provider);
+
+    // Create token accounts for users
+    user1TokenAccount = await createTokenAccountIfNeeded(mint, user1.publicKey, provider);
+    user2TokenAccount = await createTokenAccountIfNeeded(mint, user2.publicKey, provider);
+
+    // Mint tokens to users
+    await mintTo(mint, user1TokenAccount, 100 * 10 ** decimals, provider);
+    await mintTo(mint, user2TokenAccount, 100 * 10 ** decimals, provider);
+
   });
 
   it("Initialize vault", async () => {
@@ -106,11 +129,50 @@ describe("token_vault", () => {
     assert.equal(vaultBalance, BigInt(0), "Vault should be empty after withdrawal");
   });
 
+  it("User1 transfers tokens into vault", async () => {
+    await program.methods.transferIn(new anchor.BN(1 * 10 ** decimals)).accounts({
+      tokenAccountOwnerPda,
+      vaultTokenAccount: tokenVault,
+      senderTokenAccount: user1TokenAccount,
+      mintOfTokenBeingSent: mint,
+      signer: user1.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).signers([user1]).rpc();
+
+    const userBalance = await getAccountBalance(user1TokenAccount);
+    const vaultBalance = await getAccountBalance(tokenVault);
+
+    assert.equal(userBalance, BigInt(99), "User1 should have 99 tokens left");
+    assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token");
+  });
+
+  it("User2 transfers tokens into vault", async () => {
+    await program.methods.transferIn(new anchor.BN(1 * 10 ** decimals)).accounts({
+      tokenAccountOwnerPda,
+      vaultTokenAccount: tokenVault,
+      senderTokenAccount: user2TokenAccount,
+      mintOfTokenBeingSent: mint,
+      signer: user2.publicKey,
+      tokenProgram: TOKEN_PROGRAM_ID,
+    }).signers([user2]).rpc();
+
+    const userBalance = await getAccountBalance(user2TokenAccount);
+    const vaultBalance = await getAccountBalance(tokenVault);
+
+    assert.equal(userBalance, BigInt(99), "User2 should have 99 tokens left");
+    assert.equal(vaultBalance, BigInt(2), "Vault should have 2 tokens total");
+  });
+
   async function getAccountBalance(account: PublicKey): Promise<bigint> {
     const acc = await getAccount(provider.connection, account);
     return acc.amount / mintDecimals;
   }
 });
+
+async function airdropSol(pubkey: PublicKey, provider: anchor.AnchorProvider) {
+  const sig = await provider.connection.requestAirdrop(pubkey, 1_000_000_000);
+  await provider.connection.confirmTransaction(sig, "confirmed");
+}
 
 async function createMint(decimals: number, provider: anchor.AnchorProvider): Promise<PublicKey> {
   const mintKeypair = Keypair.generate();
