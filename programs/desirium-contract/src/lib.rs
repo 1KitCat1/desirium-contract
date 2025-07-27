@@ -16,8 +16,10 @@ pub const BPS_DENOMINATOR: u64 = 10_000; // BPS - basis points
 pub mod token_vault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, target_amount: u64, ipfs_link: String) -> Result<()> {
+    pub fn initialize(ctx: Context<Initialize>, vault_id: String, target_amount: u64, ipfs_link: String) -> Result<()> {
         let config = &mut ctx.accounts.vault_config;
+        config.authority = ctx.accounts.signer.key();
+        config.vault_id = vault_id;
         config.token_mint = ctx.accounts.token_mint.key();
         config.target_amount = target_amount;
         config.bump = ctx.bumps.vault_config;
@@ -70,8 +72,10 @@ pub mod token_vault {
             .unwrap();
         let user_amount = amount.checked_sub(commission).unwrap();
     
+        let authority = ctx.accounts.vault_config.authority;
+        let vault_id = ctx.accounts.vault_config.vault_id.as_bytes();
         let bump = ctx.accounts.vault_config.bump;
-        let seeds = &[b"vault_config".as_ref(), &[bump]];
+        let seeds = &[b"vault_config".as_ref(), authority.as_ref(), vault_id, &[bump]];
         let signer = &[&seeds[..]];
     
         // Transfer commission to protocol
@@ -107,6 +111,7 @@ pub mod token_vault {
     
         Ok(())
     }
+
     pub fn get_ipfs_link(ctx: Context<GetIpfsLink>) -> Result<String> {
         Ok(ctx.accounts.vault_config.ipfs_link.clone())
     }
@@ -114,6 +119,8 @@ pub mod token_vault {
 
 #[account]
 pub struct VaultConfig {
+    pub authority: Pubkey,
+    pub vault_id: String,
     pub token_mint: Pubkey,
     pub target_amount: u64,
     pub bump: u8,
@@ -121,20 +128,21 @@ pub struct VaultConfig {
 }
 
 #[derive(Accounts)]
+#[instruction(vault_id: String)]
 pub struct Initialize<'info> {
     #[account(
         init,
         payer = signer,
-        seeds = [b"vault_config"],
+        seeds = [b"vault_config", signer.key().as_ref(), vault_id.as_bytes()],
         bump,
-        space = 8 + 32 + 8 + 1 + 4 + 200 // discriminator + pubkey + u64 + u8 + str
+        space = 8 + 32 + 4 + vault_id.len() + 32 + 8 + 1 + 4 + 200 // discriminator + authority + vault_id + token_mint + target_amount + bump + ipfs_link
     )]
     pub vault_config: Account<'info, VaultConfig>,
 
     #[account(
         init,
         payer = signer,
-        seeds = [b"token_vault", token_mint.key().as_ref()],
+        seeds = [b"token_vault", signer.key().as_ref(), vault_id.as_bytes(), token_mint.key().as_ref()],
         bump,
         token::mint = token_mint,
         token::authority = vault_config,
@@ -148,26 +156,29 @@ pub struct Initialize<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
-    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
+#[instruction(vault_id: String)]
 pub struct GetIpfsLink<'info> {
-    #[account(seeds = [b"vault_config"], bump = vault_config.bump)]
+    #[account(
+        seeds = [b"vault_config", vault_config.authority.as_ref(), vault_id.as_bytes()], 
+        bump = vault_config.bump
+    )]
     pub vault_config: Account<'info, VaultConfig>,
 }
 
 #[derive(Accounts)]
 pub struct TransferAccounts<'info> {
     #[account(
-        seeds = [b"vault_config"],
+        seeds = [b"vault_config", vault_config.authority.as_ref(), vault_config.vault_id.as_bytes()],
         bump = vault_config.bump,
     )]
     pub vault_config: Account<'info, VaultConfig>,
 
     #[account(
         mut,
-        seeds = [b"token_vault", vault_config.token_mint.as_ref()],
+        seeds = [b"token_vault", vault_config.authority.as_ref(), vault_config.vault_id.as_bytes(), vault_config.token_mint.as_ref()],
         bump,
         token::mint = vault_config.token_mint,
         token::authority = vault_config,
