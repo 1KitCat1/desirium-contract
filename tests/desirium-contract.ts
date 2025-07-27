@@ -12,6 +12,8 @@
     TOKEN_PROGRAM_ID,
   } from "@solana/spl-token";
   import { assert } from "chai";
+  import { BN } from "bn.js";
+  import { TokenVault } from "../target/types/token_vault";
 
   
   const PROTOCOL_OWNER = new PublicKey(
@@ -21,7 +23,7 @@
   describe("token_vault", () => {
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
-    const program = anchor.workspace.TokenVault as Program;
+    const program = anchor.workspace.TokenVault as Program<TokenVault>;
 
     const decimals = 9;
     const mintDecimals = BigInt(10 ** decimals);
@@ -95,7 +97,7 @@
 
     it("Initialize vault with target amount", async () => {
       // Use BigNumber for the initialize call with the target amount
-      const targetAmountBN = new anchor.BN(targetAmount.toString());
+      const targetAmountBN = new BN(targetAmount.toString());
 
       const tx = await program.methods
         .initialize(targetAmountBN, ipfsStr)
@@ -111,9 +113,8 @@
         .rpc();
 
       console.log("Initialize tx:", tx);
-      const ipfsLink = await program.account.vaultConfig
-        .fetch(vaultConfigPda)
-        .then((acct) => acct.ipfsLink);
+      const vaultConfigAccount = await program.account.vaultConfig.fetch(vaultConfigPda);
+      const ipfsLink = vaultConfigAccount.ipfsLink;
       console.log("IPFS link:", ipfsLink);
 
       // Verify vault is empty
@@ -131,10 +132,10 @@
 
     it("User1 transfers tokens into vault", async () => {
       // Convert amount to Anchor's BN type
-      const amount = new anchor.BN((100 * 10 ** decimals).toString());
+      const amount = new BN((100 * 10 ** decimals).toString());
 
       await program.methods
-        .transferIn(new anchor.BN(100 * 10 ** decimals))
+        .transferIn(amount)
         .accounts({
           vaultConfig: vaultConfigPda,
           vaultTokenAccount: tokenVault,
@@ -157,7 +158,7 @@
 
     it("User2 transfers tokens into vault", async () => {
       // Convert amount to Anchor's BN type
-      const amount = new anchor.BN((1 * 10 ** decimals).toString());
+      const amount = new BN((1 * 10 ** decimals).toString());
 
       await program.methods
         .transferIn(amount)
@@ -218,7 +219,7 @@
       // Attempt transferIn with wrong token account - should fail constraint check
       try {
         // Convert amount to Anchor's BN type
-        const amount = new anchor.BN((1 * 10 ** decimals).toString());
+        const amount = new BN((1 * 10 ** decimals).toString());
 
         await program.methods
           .transferIn(amount)
@@ -249,7 +250,7 @@
 
     it("Transfer out tokens (target amount NOT reached, 5% commision)", async () => {
       // Convert amount to Anchor's BN type
-      const amount = new anchor.BN((100 * 10 ** decimals).toString());
+      const amount = new BN((100 * 10 ** decimals).toString());
 
       await program.methods
         .transferOut(amount)
@@ -278,7 +279,7 @@
 
     it("Transfer out tokens (target amount reached, 1% commision)", async () => {
       // Convert amount to Anchor's BN type
-      const amount = new anchor.BN((200 * 10 ** decimals).toString());
+      const amount = new BN((200 * 10 ** decimals).toString());
 
       await program.methods
         .transferIn(amount)
