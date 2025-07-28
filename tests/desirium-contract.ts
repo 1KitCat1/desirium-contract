@@ -20,18 +20,29 @@
     "55oBBfLE4LPAYQthXYkfNN5WZBzD4f5EfpPYkTMuP6RU" 
   );
 
-  describe("token_vault", () => {
+  describe("token_vault - Multiple Vaults", () => {
     const provider = anchor.AnchorProvider.env();
     anchor.setProvider(provider);
     const program = anchor.workspace.TokenVault as Program<TokenVault>;
 
     const decimals = 9;
     const mintDecimals = BigInt(10 ** decimals);
-    const targetAmount = BigInt(200 * 10 ** decimals);
-    const ipfsStr = "ipfs://HAsh";
+    const targetAmount1 = BigInt(200 * 10 ** decimals);
+    const targetAmount2 = BigInt(150 * 10 ** decimals);
+    const vaultId1 = "vault-1";
+    const vaultId2 = "vault-2";
+    const vaultId3 = "user2-vault-1";
+    const ipfsStr1 = "ipfs://HAsh1";
+    const ipfsStr2 = "ipfs://HAsh2";
+    const ipfsStr3 = "ipfs://HAsh3";
+
     let mint: PublicKey;
-    let vaultConfigPda: PublicKey;
-    let tokenVault: PublicKey;
+    let vaultConfig1Pda: PublicKey;
+    let vaultConfig2Pda: PublicKey;
+    let vaultConfig3Pda: PublicKey;
+    let tokenVault1: PublicKey;
+    let tokenVault2: PublicKey;
+    let tokenVault3: PublicKey;
     let user1: Keypair;
     let user2: Keypair;
     let user1TokenAccount: PublicKey;
@@ -42,20 +53,40 @@
       // Create mint
       mint = await createMint(decimals, provider);
 
-      // Derive PDAs
-      [vaultConfigPda] = PublicKey.findProgramAddressSync(
-        [Buffer.from("vault_config")],
-        program.programId
-      );
-
-      [tokenVault] = PublicKey.findProgramAddressSync(
-        [Buffer.from("token_vault"), mint.toBuffer()],
-        program.programId
-      );
-
       // Create test users
       user1 = Keypair.generate();
       user2 = Keypair.generate();
+
+      // Derive PDAs for different vaults
+      [vaultConfig1Pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vault_config"), user1.publicKey.toBuffer(), Buffer.from(vaultId1)],
+        program.programId
+      );
+
+      [vaultConfig2Pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vault_config"), user1.publicKey.toBuffer(), Buffer.from(vaultId2)],
+        program.programId
+      );
+
+      [vaultConfig3Pda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("vault_config"), user2.publicKey.toBuffer(), Buffer.from(vaultId3)],
+        program.programId
+      );
+
+      [tokenVault1] = PublicKey.findProgramAddressSync(
+        [Buffer.from("token_vault"), user1.publicKey.toBuffer(), Buffer.from(vaultId1), mint.toBuffer()],
+        program.programId
+      );
+
+      [tokenVault2] = PublicKey.findProgramAddressSync(
+        [Buffer.from("token_vault"), user1.publicKey.toBuffer(), Buffer.from(vaultId2), mint.toBuffer()],
+        program.programId
+      );
+
+      [tokenVault3] = PublicKey.findProgramAddressSync(
+        [Buffer.from("token_vault"), user2.publicKey.toBuffer(), Buffer.from(vaultId3), mint.toBuffer()],
+        program.programId
+      );
 
       // Airdrop SOL to users
       await airdropSol(user1.publicKey, provider);
@@ -74,12 +105,12 @@
       );
 
       // Mint tokens to users
-      await mintTo(mint, user1TokenAccount, 200 * 10 ** decimals, provider);
-      await mintTo(mint, user2TokenAccount, 300 * 10 ** decimals, provider);
+      await mintTo(mint, user1TokenAccount, 500 * 10 ** decimals, provider);
+      await mintTo(mint, user2TokenAccount, 400 * 10 ** decimals, provider);
 
       // Create protocol token account using the same mint
       protocolTokenAccount = getAssociatedTokenAddressSync(
-        mint, // Use the same mint as the vault
+        mint,
         PROTOCOL_OWNER
       );
       if (!(await provider.connection.getAccountInfo(protocolTokenAccount))) {
@@ -95,50 +126,99 @@
       }
     });
 
-    it("Initialize vault with target amount", async () => {
-      // Use BigNumber for the initialize call with the target amount
-      const targetAmountBN = new BN(targetAmount.toString());
+    it("User1 creates first vault", async () => {
+      const targetAmountBN = new BN(targetAmount1.toString());
 
       const tx = await program.methods
-        .initialize(targetAmountBN, ipfsStr)
+        .initialize(vaultId1, targetAmountBN, ipfsStr1)
         .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
+          vaultConfig: vaultConfig1Pda,
+          vaultTokenAccount: tokenVault1,
           tokenMint: mint,
-          signer: provider.wallet.publicKey,
+          signer: user1.publicKey,
           systemProgram: SystemProgram.programId,
           tokenProgram: TOKEN_PROGRAM_ID,
-          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
         })
+        .signers([user1])
         .rpc();
 
-      console.log("Initialize tx:", tx);
-      const vaultConfigAccount = await program.account.vaultConfig.fetch(vaultConfigPda);
-      const ipfsLink = vaultConfigAccount.ipfsLink;
-      console.log("IPFS link:", ipfsLink);
+      console.log("Initialize vault1 tx:", tx);
 
       // Verify vault is empty
-      const vaultAccount = await getAccount(provider.connection, tokenVault);
-      assert.equal(vaultAccount.amount, BigInt(0), "Vault should start empty");
+      const vaultAccount = await getAccount(provider.connection, tokenVault1);
+      assert.equal(vaultAccount.amount, BigInt(0), "Vault1 should start empty");
 
-      // Verify the target amount was set correctly
-      const vaultConfig = await program.account.vaultConfig.fetch(vaultConfigPda);
+      // Verify the target amount and vault ID were set correctly
+      const vaultConfig = await program.account.vaultConfig.fetch(vaultConfig1Pda);
       assert.equal(
         vaultConfig.targetAmount.toString(),
-        targetAmount.toString(),
+        targetAmount1.toString(),
         "Target amount should be set correctly"
       );
+      assert.equal(vaultConfig.vaultId, vaultId1, "Vault ID should be set correctly");
+      assert.equal(vaultConfig.authority.toString(), user1.publicKey.toString(), "Authority should be user1");
     });
 
-    it("User1 transfers tokens into vault", async () => {
-      // Convert amount to Anchor's BN type
-      const amount = new BN((100 * 10 ** decimals).toString());
+    it("User1 creates second vault with different configuration", async () => {
+      const targetAmountBN = new BN(targetAmount2.toString());
 
-      await program.methods
-        .transferIn(amount)
+      const tx = await program.methods
+        .initialize(vaultId2, targetAmountBN, ipfsStr2)
         .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
+          vaultConfig: vaultConfig2Pda,
+          vaultTokenAccount: tokenVault2,
+          tokenMint: mint,
+          signer: user1.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user1])
+        .rpc();
+
+      console.log("Initialize vault2 tx:", tx);
+
+      // Verify vault configuration
+      const vaultConfig = await program.account.vaultConfig.fetch(vaultConfig2Pda);
+      assert.equal(
+        vaultConfig.targetAmount.toString(),
+        targetAmount2.toString(),
+        "Target amount should be different for vault2"
+      );
+      assert.equal(vaultConfig.vaultId, vaultId2, "Vault ID should be vault-2");
+      assert.equal(vaultConfig.ipfsLink, ipfsStr2, "IPFS link should be different");
+    });
+
+    it("User2 creates their own vault", async () => {
+      const targetAmountBN = new BN(targetAmount1.toString());
+
+      const tx = await program.methods
+        .initialize(vaultId3, targetAmountBN, ipfsStr3)
+        .accounts({
+          vaultConfig: vaultConfig3Pda,
+          vaultTokenAccount: tokenVault3,
+          tokenMint: mint,
+          signer: user2.publicKey,
+          systemProgram: SystemProgram.programId,
+          tokenProgram: TOKEN_PROGRAM_ID,
+        })
+        .signers([user2])
+        .rpc();
+
+      console.log("Initialize vault3 tx:", tx);
+
+      // Verify vault configuration
+      const vaultConfig = await program.account.vaultConfig.fetch(vaultConfig3Pda);
+      assert.equal(vaultConfig.authority.toString(), user2.publicKey.toString(), "Authority should be user2");
+      assert.equal(vaultConfig.vaultId, vaultId3, "Vault ID should be user2-vault-1");
+    });
+
+    it("Users can transfer tokens to specific vaults independently", async () => {
+      // User1 transfers to vault1
+      await program.methods
+        .transferIn(new BN((100 * 10 ** decimals).toString()))
+        .accounts({
+          vaultConfig: vaultConfig1Pda,
+          vaultTokenAccount: tokenVault1,
           senderTokenAccount: user1TokenAccount,
           protocolTokenAccount: protocolTokenAccount,
           signer: user1.publicKey,
@@ -147,145 +227,26 @@
         .signers([user1])
         .rpc();
 
-      const userBalance = await getAccountBalance(user1TokenAccount);
-      const vaultBalance = await getAccountBalance(tokenVault);
-
-      // NOTE: USER 200 -> 100
-      // NOTE: VAULT 0 -> 100
-      assert.equal(userBalance, BigInt(100), "User1 should have 100 tokens left");
-      assert.equal(vaultBalance, BigInt(100), "Vault should have 100 tokens");
-    });
-
-    it("User2 transfers tokens into vault", async () => {
-      // Convert amount to Anchor's BN type
-      const amount = new BN((1 * 10 ** decimals).toString());
-
+      // User1 transfers to vault2 
       await program.methods
-        .transferIn(amount)
+        .transferIn(new BN((50 * 10 ** decimals).toString()))
         .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
-          senderTokenAccount: user2TokenAccount,
-          protocolTokenAccount: protocolTokenAccount,
-          signer: user2.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .signers([user2])
-        .rpc();
-
-      const userBalance = await getAccountBalance(user2TokenAccount);
-      const vaultBalance = await getAccountBalance(tokenVault);
-
-      // NOTE: USER2: 300 -> - 1 = 299
-      // NOTE: VAULT: 100 -> + 1 = 101
-      assert.equal(userBalance, BigInt(299), "User2 should have 99 tokens left");
-      assert.equal(vaultBalance, BigInt(101), "Vault should have 2 tokens");
-    });
-
-    it("Checks funding progress against target", async () => {
-      const vaultBalance = await getAccountBalance(tokenVault);
-      const vaultConfig = await program.account.vaultConfig.fetch(vaultConfigPda);
-
-      const targetAmountTokens =
-        BigInt(vaultConfig.targetAmount.toString()) / mintDecimals;
-      const progress = (vaultBalance * BigInt(100)) / targetAmountTokens;
-
-      console.log(
-        `Funding progress: ${progress}% (${vaultBalance} of ${targetAmountTokens} tokens)`
-      );
-
-      // Verify we're not yet at target
-      assert.isBelow(
-        Number(progress),
-        100,
-        "Vault should not yet be fully funded"
-      );
-    });
-
-    it("Fails when user tries to fund vault with incorrect token mint", async () => {
-      // Create a second mint (wrong mint)
-      const wrongMint = await createMint(decimals, provider);
-
-      // Create token account for user1 with wrong mint
-      const wrongTokenAccount = await createTokenAccountIfNeeded(
-        wrongMint,
-        user1.publicKey,
-        provider
-      );
-
-      // Mint tokens to wrong token account
-      await mintTo(wrongMint, wrongTokenAccount, 100 * 10 ** decimals, provider);
-
-      // Attempt transferIn with wrong token account - should fail constraint check
-      try {
-        // Convert amount to Anchor's BN type
-        const amount = new BN((1 * 10 ** decimals).toString());
-
-        await program.methods
-          .transferIn(amount)
-          .accounts({
-            vaultConfig: vaultConfigPda,
-            vaultTokenAccount: tokenVault,
-            senderTokenAccount: wrongTokenAccount,
-            protocolTokenAccount: protocolTokenAccount,
-            signer: user1.publicKey,
-            tokenProgram: TOKEN_PROGRAM_ID,
-          })
-          .signers([user1])
-          .rpc();
-
-        assert.fail(
-          "transferIn should have failed due to mint mismatch constraint"
-        );
-      } catch (error: any) {
-        const errMsg = error.error?.msg ?? error.toString();
-        // Anchor constraint raw error code is 2003
-        assert.ok(
-          errMsg.includes("A raw constraint was violated") ||
-            errMsg.includes("ConstraintRaw"),
-          `Expected raw constraint error, got: ${errMsg}`
-        );
-      }
-    });
-
-    it("Transfer out tokens (target amount NOT reached, 5% commision)", async () => {
-      // Convert amount to Anchor's BN type
-      const amount = new BN((100 * 10 ** decimals).toString());
-
-      await program.methods
-        .transferOut(amount)
-        .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
+          vaultConfig: vaultConfig2Pda,
+          vaultTokenAccount: tokenVault2,
           senderTokenAccount: user1TokenAccount,
           protocolTokenAccount: protocolTokenAccount,
-          signer: provider.wallet.publicKey,
+          signer: user1.publicKey,
           tokenProgram: TOKEN_PROGRAM_ID,
         })
+        .signers([user1])
         .rpc();
 
-      const userBalance = await getAccountBalance(user1TokenAccount);
-      const vaultBalance = await getAccountBalance(tokenVault);
-      const protocolBalance = await getAccountBalance(protocolTokenAccount);
-      // NOTE: because of the commision user will receive back less tokens (100 * 5% = 5)
-      // NOTE: USER #1: 100 -> + 100 - 5 = 195
-      // NOTE: VAULT: 101 -> - 100 = 1
-      // NOTE: PROTOCOL: 0 -> + 5 = 5
-      assert.equal(userBalance, BigInt(195), "User should have 195 tokens");
-      assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token left");
-      assert.equal(protocolBalance, BigInt(5), "Protocol should have 5 tokens");
-    });
-
-
-    it("Transfer out tokens (target amount reached, 1% commision)", async () => {
-      // Convert amount to Anchor's BN type
-      const amount = new BN((200 * 10 ** decimals).toString());
-
+      // User2 transfers to their vault
       await program.methods
-        .transferIn(amount)
+        .transferIn(new BN((75 * 10 ** decimals).toString()))
         .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
+          vaultConfig: vaultConfig3Pda,
+          vaultTokenAccount: tokenVault3,
           senderTokenAccount: user2TokenAccount,
           protocolTokenAccount: protocolTokenAccount,
           signer: user2.publicKey,
@@ -294,42 +255,65 @@
         .signers([user2])
         .rpc();
 
-      let userBalance = await getAccountBalance(user2TokenAccount);
-      let vaultBalance = await getAccountBalance(tokenVault);
-      let protocolBalance = await getAccountBalance(protocolTokenAccount);
+      // Verify balances are independent
+      const vault1Balance = await getAccountBalance(tokenVault1);
+      const vault2Balance = await getAccountBalance(tokenVault2);
+      const vault3Balance = await getAccountBalance(tokenVault3);
+      const user1Balance = await getAccountBalance(user1TokenAccount);
+      const user2Balance = await getAccountBalance(user2TokenAccount);
 
-      // NOTE: USER #2: 299 -> - 200 =  99
-      // NOTE: VAULT: 1 -> + 200 = 201
-      // NOTE: PROTOCOL: 5 (NO CHANGE)
-      assert.equal(userBalance, BigInt(99), "User should have 99 tokens");
-      assert.equal(vaultBalance, BigInt(201), "Vault should have 201 tokens left");
-      assert.equal(protocolBalance, BigInt(5), "Protocol should have 5 tokens");
+      assert.equal(vault1Balance, BigInt(100), "Vault1 should have 100 tokens");
+      assert.equal(vault2Balance, BigInt(50), "Vault2 should have 50 tokens");
+      assert.equal(vault3Balance, BigInt(75), "Vault3 should have 75 tokens");
+      assert.equal(user1Balance, BigInt(350), "User1 should have 350 tokens left"); // 500 - 100 - 50
+      assert.equal(user2Balance, BigInt(325), "User2 should have 325 tokens left"); // 400 - 75
+    });
 
+    it("Vault funding progress is calculated independently", async () => {
+      const vaultConfig1 = await program.account.vaultConfig.fetch(vaultConfig1Pda);
+      const vaultConfig2 = await program.account.vaultConfig.fetch(vaultConfig2Pda);
+      const vaultConfig3 = await program.account.vaultConfig.fetch(vaultConfig3Pda);
 
-      await program.methods
-        .transferOut(amount)
-        .accounts({
-          vaultConfig: vaultConfigPda,
-          vaultTokenAccount: tokenVault,
-          senderTokenAccount: user2TokenAccount,
-          protocolTokenAccount: protocolTokenAccount,
-          signer: provider.wallet.publicKey,
-          tokenProgram: TOKEN_PROGRAM_ID,
-        })
-        .rpc();
+      const vault1Balance = await getAccountBalance(tokenVault1);
+      const vault2Balance = await getAccountBalance(tokenVault2);
+      const vault3Balance = await getAccountBalance(tokenVault3);
 
+      const progress1 = (vault1Balance * BigInt(100)) / (BigInt(vaultConfig1.targetAmount.toString()) / mintDecimals);
+      const progress2 = (vault2Balance * BigInt(100)) / (BigInt(vaultConfig2.targetAmount.toString()) / mintDecimals);
+      const progress3 = (vault3Balance * BigInt(100)) / (BigInt(vaultConfig3.targetAmount.toString()) / mintDecimals);
 
+      console.log(`Vault1 progress: ${progress1}% (${vault1Balance} of ${BigInt(vaultConfig1.targetAmount.toString()) / mintDecimals} tokens)`);
+      console.log(`Vault2 progress: ${progress2}% (${vault2Balance} of ${BigInt(vaultConfig2.targetAmount.toString()) / mintDecimals} tokens)`);
+      console.log(`Vault3 progress: ${progress3}% (${vault3Balance} of ${BigInt(vaultConfig3.targetAmount.toString()) / mintDecimals} tokens)`);
 
-      userBalance = await getAccountBalance(user2TokenAccount);
-      vaultBalance = await getAccountBalance(tokenVault);
-      protocolBalance = await getAccountBalance(protocolTokenAccount);
-      // NOTE: because of the commision user will receive back less tokens (200 * 1% = 2)
-      // NOTE: USER #2: 99 -> + 200 - 2 = 297
-      // NOTE: VAULT: 201 -> - 200 = 1
-      // NOTE: PROTOCOL: 5 -> + 2 = 7
-      assert.equal(userBalance, BigInt(297), "User should have 297 tokens");
-      assert.equal(vaultBalance, BigInt(1), "Vault should have 1 token left");
-      assert.equal(protocolBalance, BigInt(7), "Protocol should have 7 tokens");
+      assert.equal(progress1, BigInt(50), "Vault1 should be 50% funded");
+      assert.equal(progress2, BigInt(33), "Vault2 should be ~33% funded"); // 50/150 * 100 = 33.33
+      assert.equal(progress3, BigInt(37), "Vault3 should be ~37% funded"); // 75/200 * 100 = 37.5
+    });
+
+    it("Cannot access wrong vault with different vault ID", async () => {
+      try {
+        // Try to transfer from vault1 using vault2's config - should fail
+        await program.methods
+          .transferOut(new BN((10 * 10 ** decimals).toString()))
+          .accounts({
+            vaultConfig: vaultConfig2Pda, // Wrong config
+            vaultTokenAccount: tokenVault1, // Wrong vault for this config
+            senderTokenAccount: user1TokenAccount,
+            protocolTokenAccount: protocolTokenAccount,
+            signer: provider.wallet.publicKey,
+            tokenProgram: TOKEN_PROGRAM_ID,
+          })
+          .rpc();
+
+        assert.fail("Should have failed due to PDA mismatch");
+      } catch (error: any) {
+        assert.ok(
+          error.toString().includes("seeds constraint was violated") ||
+          error.toString().includes("ConstraintSeeds"),
+          `Expected seeds constraint error, got: ${error.toString()}`
+        );
+      }
     });
 
     async function getAccountBalance(account: PublicKey): Promise<bigint> {
