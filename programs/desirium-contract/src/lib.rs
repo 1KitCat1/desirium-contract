@@ -47,7 +47,14 @@ pub mod token_vault {
         )
     }
 
-    pub fn transfer_out(ctx: Context<TransferAccounts>, amount: u64) -> Result<()> {
+    pub fn transfer_out(ctx: Context<TransferOut>, amount: u64) -> Result<()> {
+        // Only the vault creator can transfer out
+        require_keys_eq!(
+            ctx.accounts.signer.key(),
+            ctx.accounts.vault_config.authority,
+            VaultError::UnauthorizedWithdrawal
+        );
+
         require_keys_eq!(
             ctx.accounts.sender_token_account.mint,
             ctx.accounts.vault_config.token_mint,
@@ -94,7 +101,7 @@ pub mod token_vault {
             commission,
         )?;
     
-        // Transfer the rest to the user
+        // Transfer the rest to the user (vault creator)
         let cpi_accounts_user = Transfer {
             from: ctx.accounts.vault_token_account.to_account_info(),
             to: ctx.accounts.sender_token_account.to_account_info(),
@@ -207,11 +214,56 @@ pub struct TransferAccounts<'info> {
     pub token_program: Program<'info, Token>,
 }
 
+#[derive(Accounts)]
+pub struct TransferOut<'info> {
+    #[account(
+        seeds = [b"vault_config", vault_config.authority.as_ref(), vault_config.vault_id.as_bytes()],
+        bump = vault_config.bump,
+    )]
+    pub vault_config: Account<'info, VaultConfig>,
+
+    #[account(
+        mut,
+        seeds = [b"token_vault", vault_config.authority.as_ref(), vault_config.vault_id.as_bytes(), vault_config.token_mint.as_ref()],
+        bump,
+        token::mint = vault_config.token_mint,
+        token::authority = vault_config,
+    )]
+    pub vault_token_account: Account<'info, TokenAccount>,
+
+    #[account(
+        mut,
+        constraint = sender_token_account.mint == vault_config.token_mint,
+        constraint = sender_token_account.owner == vault_config.authority @ VaultError::UnauthorizedWithdrawal
+    )]
+    pub sender_token_account: Account<'info, TokenAccount>,
+
+    /// CHECK: This is a constant protocol-owned token account
+    #[account(
+        mut,
+        address = get_associated_token_address(
+            &Pubkey::from_str(PROTOCOL_OWNER).unwrap(),
+            &vault_config.token_mint
+        )
+    )]
+    pub protocol_token_account: AccountInfo<'info>,
+
+    #[account(
+        mut,
+        constraint = signer.key() == vault_config.authority @ VaultError::UnauthorizedWithdrawal
+    )]
+    pub signer: Signer<'info>,
+
+    pub token_program: Program<'info, Token>,
+}
+
 
 #[error_code]
 pub enum VaultError {
     #[msg("Token mint mismatch with vault configuration")]
     InvalidMint,
     #[msg("IPFS link too long")]
-    IpfsLinkTooLong
+    IpfsLinkTooLong,
+    #[msg("Only the vault creator can withdraw funds")]
+    UnauthorizedWithdrawal,
 }
