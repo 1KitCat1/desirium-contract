@@ -1,7 +1,10 @@
 use std::str::FromStr;
 
 use anchor_lang::prelude::*;
-use anchor_spl::{associated_token::get_associated_token_address, token::{Mint, Token, TokenAccount, Transfer}};
+use anchor_spl::{
+    associated_token::get_associated_token_address,
+    token::{Mint, Token, TokenAccount, Transfer},
+};
 
 declare_id!("6kSShQybH6Qw7NdC7aimBtbZ6i14bQ6oyCVesttrpPr5");
 
@@ -11,12 +14,16 @@ pub const COMMISSION_BPS_ABOVE_TARGET: u64 = 100; // 1% (100 basis points)
 pub const COMMISSION_BPS_BELOW_TARGET: u64 = 500; // 5% (500 basis points)
 pub const BPS_DENOMINATOR: u64 = 10_000; // BPS - basis points
 
-
 #[program]
 pub mod token_vault {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>, vault_id: String, target_amount: u64, ipfs_link: String) -> Result<()> {
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        vault_id: String,
+        target_amount: u64,
+        ipfs_link: String,
+    ) -> Result<()> {
         let config = &mut ctx.accounts.vault_config;
         config.authority = ctx.accounts.signer.key();
         config.vault_id = vault_id;
@@ -60,17 +67,18 @@ pub mod token_vault {
             ctx.accounts.vault_config.token_mint,
             VaultError::InvalidMint
         );
-    
+
         // Get current vault balance
         let vault_balance = ctx.accounts.vault_token_account.amount;
-    
+
         // Choose commission rate
         let commission_bps = if vault_balance >= ctx.accounts.vault_config.target_amount {
             COMMISSION_BPS_ABOVE_TARGET // 1%
         } else {
             COMMISSION_BPS_BELOW_TARGET // 5%
         };
-    
+
+        // TODO: remove unwraps (ALL)
         // Calculate commission and user amount
         let commission = amount
             .checked_mul(commission_bps)
@@ -78,13 +86,18 @@ pub mod token_vault {
             .checked_div(BPS_DENOMINATOR)
             .unwrap();
         let user_amount = amount.checked_sub(commission).unwrap();
-    
+
         let authority = ctx.accounts.vault_config.authority;
         let vault_id = ctx.accounts.vault_config.vault_id.as_bytes();
         let bump = ctx.accounts.vault_config.bump;
-        let seeds = &[b"vault_config".as_ref(), authority.as_ref(), vault_id, &[bump]];
+        let seeds = &[
+            b"vault_config".as_ref(),
+            authority.as_ref(),
+            vault_id,
+            &[bump],
+        ];
         let signer = &[&seeds[..]];
-    
+
         // Transfer commission to protocol
         let protocol_token_account = ctx.accounts.protocol_token_account.to_account_info();
         let cpi_accounts_commission = Transfer {
@@ -100,7 +113,7 @@ pub mod token_vault {
             ),
             commission,
         )?;
-    
+
         // Transfer the rest to the user (vault creator)
         let cpi_accounts_user = Transfer {
             from: ctx.accounts.vault_token_account.to_account_info(),
@@ -115,7 +128,7 @@ pub mod token_vault {
             ),
             user_amount,
         )?;
-    
+
         Ok(())
     }
 
@@ -125,12 +138,15 @@ pub mod token_vault {
 }
 
 #[account]
+#[derive(InitSpace)]
 pub struct VaultConfig {
     pub authority: Pubkey,
+    #[max_len(32)]
     pub vault_id: String,
     pub token_mint: Pubkey,
     pub target_amount: u64,
     pub bump: u8,
+    #[max_len(100)]
     pub ipfs_link: String,
 }
 
@@ -142,7 +158,7 @@ pub struct Initialize<'info> {
         payer = signer,
         seeds = [b"vault_config", signer.key().as_ref(), vault_id.as_bytes()],
         bump,
-        space = 8 + 32 + 4 + vault_id.len() + 32 + 8 + 1 + 4 + 200 // discriminator + authority + vault_id + token_mint + target_amount + bump + ipfs_link
+        space = 8 + VaultConfig::INIT_SPACE
     )]
     pub vault_config: Account<'info, VaultConfig>,
 
@@ -256,7 +272,6 @@ pub struct TransferOut<'info> {
 
     pub token_program: Program<'info, Token>,
 }
-
 
 #[error_code]
 pub enum VaultError {
